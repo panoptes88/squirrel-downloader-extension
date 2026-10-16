@@ -1,0 +1,22 @@
+# 打包产物（Chrome 应用商店上传用的 zip / crx / 私钥，绝不入库）
+*.zip
+*.crx
+*.pem
+*.publish
+
+# 图标生成脚本的临时预览图
+icons/_preview.png
+
+# IDE / 编辑器
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 操作系统
+.DS_Store
+Thumbs.db
+
+# 临时文件
+*.tmp
+.temp/
