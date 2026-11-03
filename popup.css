@@ -65,6 +65,10 @@
 
 body {
   width: 420px;
+  /* 桌面弹窗的宽度由内容撑出，此时 100% 就等于 420px，行为不变；
+     但外层比 420px 更宽时（Edge 侧边栏、在较宽的标签页里直接打开 popup.html 等），
+     不加这一条 body 会停在 420px，右侧露出一块空白。 */
+  min-width: 100%;
   min-height: 300px;
   max-height: 600px;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif;
@@ -81,6 +85,22 @@ body {
   max-height: 600px;
 }
 
+/* 手机端（Edge / Chrome 手机版）的扩展弹层比桌面窄。固定 420px 会让右侧内容
+   ——状态胶囊、资源计数、底部发送按钮——被硬生生裁掉，所以窄屏下改为跟随父容器宽度。
+   阈值必须是 419（严格小于桌面弹窗的 420px）：否则这条规则在桌面端也会命中，
+   而桌面弹窗的高度由内容撑出，混入 100vw / 100vh 会算出不稳定的值，把界面压扁。 */
+@media (max-width: 419px) {
+  body {
+    width: 100%;
+    max-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  .container {
+    max-height: 100vh;
+  }
+}
+
 .hide {
   display: none !important;
 }
@@ -90,6 +110,7 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
   padding: 12px 14px;
   background: var(--primary);
   color: #fff;
@@ -99,9 +120,16 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0; /* 窄屏下允许收缩，避免把右侧状态挤出可视区 */
   font-size: 15px;
   font-weight: 600;
   letter-spacing: 0.2px;
+}
+
+.title > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .logo {
@@ -110,14 +138,37 @@ body {
   border-radius: 6px;
 }
 
+/* 状态胶囊同时是设置入口：点一下打开设置页。
+   作为 <button> 使用，需要把浏览器默认的边框/字体/颜色重置掉。 */
 .status {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  min-width: 0; /* 代理信息较长时允许收缩，避免把标题挤变形 */
   padding: 4px 10px;
+  border: none;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.15);
+  color: inherit;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: inherit;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.status:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.status:active {
+  background: rgba(255, 255, 255, 0.42);
+}
+
+.status-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .status-dot {
@@ -148,6 +199,7 @@ body {
   color: var(--text-sub);
   font-size: 12px;
   white-space: nowrap;
+  flex-shrink: 0; /* 窄屏下不要被前面的按钮挤出可视区 */
 }
 
 /* ===== 代理开关 ===== */
@@ -477,6 +529,17 @@ body {
   padding: 10px 14px;
   background: var(--surface);
   border-top: 1px solid var(--border);
+}
+
+/* 窄屏下让发送按钮可以收缩，文案超长时省略而不是撑破底栏 */
+.footer #btnSend {
+  min-width: 0;
+}
+
+.footer #btnSend .btn-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .selected-info {

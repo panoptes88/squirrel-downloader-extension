@@ -71,6 +71,7 @@ const elements = {
   btnClear: document.getElementById('btnClear'),
   btnSelectAll: document.getElementById('btnSelectAll'),
   btnSend: document.getElementById('btnSend'),
+  statusEl: document.getElementById('status'),
   toast: document.getElementById('toast'),
   toastMessage: document.querySelector('#toast .toast-message'),
   toastClose: document.getElementById('toastClose'),
@@ -454,6 +455,24 @@ function bindEvents() {
       checkbox.dispatchEvent(new Event('change', { bubbles: true }));
     }
   });
+
+  // 状态胶囊本身就是设置入口：移动端（Edge / Chrome 手机版）没有右键菜单，
+  // 插件图标点开就是这个弹窗，不给显式入口就完全进不去设置页。
+  if (elements.statusEl) {
+    elements.statusEl.addEventListener('click', function() {
+      try {
+        if (chrome.runtime.openOptionsPage) {
+          chrome.runtime.openOptionsPage();
+        } else {
+          // 旧版 / 部分移动端浏览器不支持 openOptionsPage，退回直接开标签页
+          chrome.tabs.create({ url: chrome.runtime.getURL('options.html') });
+        }
+      } catch (err) {
+        console.error('[松鼠下载器] 打开设置页失败:', err);
+        chrome.tabs.create({ url: chrome.runtime.getURL('options.html') });
+      }
+    });
+  }
 
   // 刷新按钮
   elements.btnRefresh.addEventListener('click', async function() {

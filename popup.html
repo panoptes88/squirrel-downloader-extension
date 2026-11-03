@@ -14,10 +14,12 @@
         <img src="icons/icon48.png" alt="" class="logo">
         <span>松鼠下载器</span>
       </div>
-      <div class="status" id="status">
+      <!-- 状态胶囊本身就是设置入口：点一下打开设置页。
+           移动端没有右键菜单，这是唯一的显式入口。 -->
+      <button type="button" class="status" id="status" title="点击打开设置" aria-label="打开设置">
         <span class="status-dot" aria-hidden="true"></span>
         <span class="status-text">未连接</span>
-      </div>
+      </button>
     </div>
 
     <!-- 工具栏 -->
