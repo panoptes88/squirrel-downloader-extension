@@ -44,10 +44,13 @@ const elements = {
 let isDirty = false;
 
 // 默认支持的资源类型
+// 默认勾选的嗅探类型。与 background.js 里的 DEFAULT_ENABLED_EXTENSIONS 保持一致
+// （service worker 不是 module，无法复用，改动时请两处同步）。
+// TS 默认不勾选：它是 HLS 分片，一集视频会有成百上千条，会把列表刷满。
 const DEFAULT_EXTENSIONS = [
   { ext: 'm3u8', label: 'M3U8', enabled: true },
   { ext: 'mp4', label: 'MP4', enabled: true },
-  { ext: 'ts', label: 'TS', enabled: true },
+  { ext: 'ts', label: 'TS', enabled: false },
   { ext: 'm4s', label: 'M4S', enabled: true },
   { ext: 'm4a', label: 'M4A', enabled: true },
   { ext: 'mpd', label: 'MPD', enabled: true },
@@ -236,9 +239,10 @@ function resetToDefaults() {
   elements.aiApiKey.value = '';
   elements.aiPrompt.value = DEFAULT_AI_PROMPT;
 
-  // 资源类型全选
+  // 资源类型恢复各自的默认勾选状态（TS 默认不勾选，不能一律全选）
   elements.extGrid.querySelectorAll('input[type="checkbox"]').forEach(function(checkbox) {
-    checkbox.checked = true;
+    const item = DEFAULT_EXTENSIONS.find(function(entry) { return entry.ext === checkbox.value; });
+    checkbox.checked = item ? item.enabled : true;
   });
 
   toggleProxySettings();

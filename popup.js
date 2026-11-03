@@ -460,16 +460,21 @@ function bindEvents() {
   // 插件图标点开就是这个弹窗，不给显式入口就完全进不去设置页。
   if (elements.statusEl) {
     elements.statusEl.addEventListener('click', function() {
+      // 打开失败（不支持或返回的 Promise 被 reject）时退回直接开标签页
+      function openOptionsFallback(err) {
+        if (err) console.error('[松鼠下载器] 打开设置页失败:', err);
+        chrome.tabs.create({ url: chrome.runtime.getURL('options.html') });
+      }
+
       try {
         if (chrome.runtime.openOptionsPage) {
-          chrome.runtime.openOptionsPage();
+          // MV3 里返回 Promise，回调式实现返回 undefined，统一包一层
+          Promise.resolve(chrome.runtime.openOptionsPage()).catch(openOptionsFallback);
         } else {
-          // 旧版 / 部分移动端浏览器不支持 openOptionsPage，退回直接开标签页
-          chrome.tabs.create({ url: chrome.runtime.getURL('options.html') });
+          openOptionsFallback();
         }
       } catch (err) {
-        console.error('[松鼠下载器] 打开设置页失败:', err);
-        chrome.tabs.create({ url: chrome.runtime.getURL('options.html') });
+        openOptionsFallback(err);
       }
     });
   }

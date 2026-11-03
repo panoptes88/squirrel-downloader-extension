@@ -3,6 +3,19 @@
  * 嗅探网页媒体资源
  */
 
+// 默认启用的扩展名。与 options.js 里的 DEFAULT_EXTENSIONS 保持一致
+// （service worker 不是 module，无法直接复用 defaults.js，改动时请两处同步）。
+//
+// 刻意不含 ts：TS 是 HLS 的分片，一集视频动辄几百上千条，会把资源列表刷满，
+// 真正的入口（m3u8 播放列表）反而被淹没。需要时可在设置页手动勾选。
+const DEFAULT_ENABLED_EXTENSIONS = [
+  'm3u8', 'mp4', 'm4s', 'm4a', 'mpd', 'flv', 'webm',
+  'mp3', 'wav', 'ogg', 'aac', 'mkv', 'mov', 'avi'
+];
+
+// 旧版本的默认值（当时全部启用）。仅用于升级时判断用户是否动过默认设置。
+const LEGACY_DEFAULT_EXTENSIONS = DEFAULT_ENABLED_EXTENSIONS.concat(['ts']);
+
 // 全局状态
 const state = {
   // 按 tabId 分组存储嗅探到的资源
@@ -11,22 +24,51 @@ const state = {
   requestHeaders: new Map(),
   // 已处理的 requestId 集合（去重）
   processedRequests: new Set(),
-  // 启用的扩展名列表（默认全部启用）
+  // 启用的扩展名列表（默认见 DEFAULT_ENABLED_EXTENSIONS）
   enabledExtensions: null
 };
 
+/**
+ * 一次性迁移：旧版本的默认值是「全部启用」，其中包含 TS。
+ * 只有在用户从未改动过默认值（存下来的正好是旧的全集）时才替换成新默认。
+ *
+ * 用 extDefaultsMigrated 标记保证只做一次——否则用户以后手动把 TS 重新勾上，
+ * 存储值又会等于旧全集，下次启动就会被再次改回去。
+ * 不依赖 onInstalled 事件：未打包扩展重启时 Chrome 不一定按 update 上报。
+ */
+function migrateExtensionDefaults() {
+  return new Promise(function(resolve) {
+    chrome.storage.sync.get(['enabledExtensions', 'extDefaultsMigrated'], function(data) {
+      if (data.extDefaultsMigrated) { resolve(); return; }
+      const list = data.enabledExtensions;
+      const untouched =
+        Array.isArray(list) &&
+        list.length === LEGACY_DEFAULT_EXTENSIONS.length &&
+        LEGACY_DEFAULT_EXTENSIONS.every(function(ext) { return list.indexOf(ext) !== -1; });
+      chrome.storage.sync.set(
+        untouched
+          ? { enabledExtensions: DEFAULT_ENABLED_EXTENSIONS.slice(), extDefaultsMigrated: true }
+          : { extDefaultsMigrated: true },
+        function() {
+          if (untouched) {
+            console.log('[松鼠下载器] 升级：默认嗅探类型已更新，TS 不再默认抓取');
+          }
+          resolve();
+        }
+      );
+    });
+  });
+}
+
 // 加载启用的扩展名配置
 async function loadEnabledExtensions() {
+  await migrateExtensionDefaults();
   return new Promise((resolve) => {
     chrome.storage.sync.get(['enabledExtensions'], function(data) {
       if (data.enabledExtensions && data.enabledExtensions.length > 0) {
         state.enabledExtensions = new Set(data.enabledExtensions);
       } else {
-        // 默认全部启用
-        state.enabledExtensions = new Set([
-          'm3u8', 'mp4', 'ts', 'm4s', 'm4a', 'mpd', 'flv', 'webm',
-          'mp3', 'wav', 'ogg', 'aac', 'mkv', 'mov', 'avi'
-        ]);
+        state.enabledExtensions = new Set(DEFAULT_ENABLED_EXTENSIONS);
       }
       resolve();
     });
@@ -35,6 +77,7 @@ async function loadEnabledExtensions() {
 
 // 初始化时加载配置
 loadEnabledExtensions();
+
 
 // 定期清理 declarativeNetRequest 规则（每5分钟）
 setInterval(function() {
