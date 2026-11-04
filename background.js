@@ -265,10 +265,6 @@ function extractHeaders(requestHeaders) {
     ? Object.entries(headers).map(([k, v]) => `${k}: ${v}`).join('\n')
     : '';
 
-  if (result) {
-    console.log('[松鼠下载器] 提取到 headers:', result);
-  }
-
   return result;
 }
 
@@ -499,9 +495,8 @@ async function loginAndSaveCookie(server, username, password) {
     console.log('[松鼠下载器] 登录响应状态:', response.status);
     console.log('[松鼠下载器] 响应 Content-Type:', response.headers.get('content-type'));
 
-    // 获取响应文本以便调试
+    // 先读成文本，兼容非 JSON 响应
     const responseText = await response.text();
-    console.log('[松鼠下载器] 响应内容前200字符:', responseText.substring(0, 200));
 
     if (!response.ok) {
       try {
@@ -519,7 +514,7 @@ async function loginAndSaveCookie(server, username, password) {
     } catch {
       return { success: false, error: '服务器返回无效的 JSON 响应' };
     }
-    console.log('[松鼠下载器] 登录成功:', data);
+    console.log('[松鼠下载器] 登录成功');
 
     // 等待一小段时间让浏览器处理 Set-Cookie
     await new Promise(resolve => setTimeout(resolve, 300));
@@ -638,7 +633,7 @@ async function fetchM3u8Content(url, headers) {
       }
     }
 
-    console.log('[松鼠下载器] 代理请求:', url, headers);
+    console.log('[松鼠下载器] 代理请求:', url.replace(/\?.*$/, ''));
 
     const response = await fetch(url, fetchOptions);
 
@@ -649,13 +644,29 @@ async function fetchM3u8Content(url, headers) {
     const contentType = response.headers.get('content-type') || '';
     const text = await response.text();
 
-    console.log('[松鼠下载器] 代理响应:', contentType, text.substring(0, 200));
+    console.log('[松鼠下载器] 代理响应:', contentType, text.length + ' 字符');
 
     return { success: true, data: text, contentType: contentType };
   } catch (e) {
     console.error('[松鼠下载器] 代理请求失败:', e);
     return { success: false, error: e.message };
   }
+}
+
+/**
+ * 请求头注入规则的匹配条件。
+ *
+ * 这里刻意不按域名收口：HLS 的分片经常和 m3u8 不在同一个域名（m3u8 在
+ * hls.example.com，分片在 cdn.example.com），一旦限制 requestDomains，
+ * 分片请求就拿不到 Referer，表现为预览黑屏。
+ *
+ * 之所以敢放开范围，是因为现在只注入 Referer（见 popup.js 的 previewHeaders），
+ * Cookie / Authorization 等凭证不再进入规则。
+ */
+function buildRequestHeaderCondition() {
+  return {
+    resourceTypes: ['xmlhttprequest', 'media']
+  };
 }
 
 /**
@@ -684,15 +695,13 @@ async function setRequestHeaders(headers) {
               value: headers[key]
             }))
           },
-          condition: {
-            resourceTypes: ["xmlhttprequest", "media"]
-          }
+          condition: buildRequestHeaderCondition()
         }],
         removeRuleIds: [1]
       };
 
       chrome.declarativeNetRequest.updateSessionRules(rules, function() {
-        console.log('[松鼠下载器] 已设置请求头:', headers);
+        console.log('[松鼠下载器] 已设置请求头:', Object.keys(headers).join(', '));
         resolve();
       });
     });

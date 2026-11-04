@@ -639,14 +639,18 @@ async function loadVideoInfo(index) {
   if (isM3u8) {
     // 先尝试 HLS.js 播放
     if (Hls.isSupported()) {
+      // 预览只需要 Referer 过防盗链。Cookie / Authorization / x-* 是站点凭证，
+      // 交给 DNR 规则会跟着其它标签页的请求一起发出去，这里只挑 Referer。
       const headers = parseHeaders(resource.headers);
+      const referer = headers['Referer'] || headers['referer'];
+      const previewHeaders = referer ? { Referer: referer } : {};
 
       setMediaStatus(mediaInfo, '正在加载预览...');
 
       // 使用 declarativeNetRequest 设置请求头（参考猫爪）
       await new Promise((resolve) => {
         chrome.runtime.sendMessage(
-          { type: 'setRequestHeaders', headers: headers },
+          { type: 'setRequestHeaders', headers: previewHeaders },
           resolve
         );
       });
@@ -1271,9 +1275,15 @@ async function copyToClipboard(text) {
  * HTML 转义
  */
 function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
+  // 该函数的结果既用于文本节点，也用于 title="..." 这类属性值，
+  // 所以引号也必须转义：只靠 innerHTML 不会处理 " 和 '，
+  // 页面可控的标题里带一个引号就能提前闭合属性。
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 /**
