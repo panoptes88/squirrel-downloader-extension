@@ -59,7 +59,8 @@ let aiTranslateConfig = {
 let downloadParams = {
   threadCount: DEFAULT_THREAD_COUNT,
   retryCount: DEFAULT_RETRY_COUNT,
-  autoSelect: DEFAULT_AUTO_SELECT
+  autoSelect: DEFAULT_AUTO_SELECT,
+  sendCredentials: DEFAULT_SEND_CREDENTIALS
 };
 
 // 翻译状态
@@ -186,7 +187,7 @@ async function loadConfig() {
     chrome.storage.sync.get(
       ['server', 'username', 'password', 'proxyEnable', 'proxyType', 'proxyHost', 'proxyPort', 'proxyAuth', 'proxyUsername', 'proxyPassword',
        'aiTranslateEnable', 'aiBaseUrl', 'aiModelId', 'aiApiKey', 'aiPrompt',
-       'threadCount', 'retryCount', 'autoSelect'],
+       'threadCount', 'retryCount', 'autoSelect', 'sendCredentials'],
       function(data) {
         serverConfig = {
           server: data.server || '',
@@ -213,7 +214,8 @@ async function loadConfig() {
         downloadParams = {
           threadCount: parseInt(data.threadCount) || DEFAULT_THREAD_COUNT,
           retryCount: parseInt(data.retryCount) || DEFAULT_RETRY_COUNT,
-          autoSelect: data.autoSelect !== false
+          autoSelect: data.autoSelect !== false,
+          sendCredentials: data.sendCredentials === true
         };
         resolve();
       }
@@ -751,11 +753,10 @@ async function loadVideoInfo(index) {
   if (isM3u8) {
     // 先尝试 HLS.js 播放
     if (Hls.isSupported()) {
-      // 预览只需要 Referer 过防盗链。Cookie / Authorization / x-* 是站点凭证，
-      // 交给 DNR 规则会跟着其它标签页的请求一起发出去，这里只挑 Referer。
-      const headers = parseHeaders(resource.headers);
-      const referer = headers['Referer'] || headers['referer'];
-      const previewHeaders = referer ? { Referer: referer } : {};
+      // 把嗅探到的请求头整包注入（Referer / Cookie / Authorization / x-* 等）。
+      // DNR 规则已限定 initiatorDomains = 扩展 ID，只影响本扩展自己发起的请求，
+      // 不会波及其它标签页，所以可以把凭证一并带上，兼容需要登录态的站点。
+      const previewHeaders = parseHeaders(resource.headers);
 
       setMediaStatus(mediaInfo, '正在加载预览...');
 
@@ -1055,14 +1056,28 @@ async function handleSend() {
     // 多选发送是串行的，显示进度让用户知道还要等多久
     sendLabel.textContent = `发送中 ${i + 1}/${selectedResources.length}...`;
     try {
-      // 只提取 Referer 头
+      // 默认只带 Referer；开启「发送原站凭证」后再追加登录态相关的头，
+      // 用于远程下载器因缺少 Cookie/Authorization 而返回 403 的站点。
       const headers = parseHeaders(resource.headers);
       const referer = headers['Referer'] || headers['referer'] || '';
+      const headerLines = [];
+      if (referer) headerLines.push(`Referer: ${referer}`);
+
+      if (downloadParams.sendCredentials) {
+        Object.keys(headers).forEach(function(name) {
+          const lower = name.toLowerCase();
+          if (lower === 'referer') return;
+          if (lower === 'cookie' || lower === 'authorization' || lower === 'user-agent' ||
+              lower === 'origin' || lower.startsWith('x-')) {
+            headerLines.push(`${name}: ${headers[name]}`);
+          }
+        });
+      }
 
       const task = {
         url: resource.url,
         output_name: generateOutputName(resource),
-        headers: referer ? `Referer: ${referer}` : '',
+        headers: headerLines.join('\n'),
         auto_select: downloadParams.autoSelect,
         thread_count: downloadParams.threadCount,
         retry_count: downloadParams.retryCount

@@ -10,6 +10,7 @@ const elements = {
   threadCount: document.getElementById('threadCount'),
   retryCount: document.getElementById('retryCount'),
   autoSelect: document.getElementById('autoSelect'),
+  sendCredentials: document.getElementById('sendCredentials'),
   btnTest: document.getElementById('btnTest'),
   btnSave: document.getElementById('btnSave'),
   testResult: document.getElementById('testResult'),
@@ -89,6 +90,7 @@ async function init() {
   elements.threadCount.value = config.threadCount || DEFAULT_THREAD_COUNT;
   elements.retryCount.value = config.retryCount || DEFAULT_RETRY_COUNT;
   elements.autoSelect.checked = config.autoSelect !== false;
+  elements.sendCredentials.checked = config.sendCredentials === true;
 
   // 代理配置
   elements.proxyEnable.checked = config.proxyEnable || false;
@@ -134,7 +136,7 @@ async function init() {
 function loadConfig() {
   return new Promise((resolve) => {
     chrome.storage.sync.get(
-      ['server', 'username', 'password', 'threadCount', 'retryCount', 'autoSelect', 'enabledExtensions',
+      ['server', 'username', 'password', 'threadCount', 'retryCount', 'autoSelect', 'sendCredentials', 'enabledExtensions',
        'proxyEnable', 'proxyType', 'proxyHost', 'proxyPort', 'proxyAuth', 'proxyUsername', 'proxyPassword',
        'aiTranslateEnable', 'aiBaseUrl', 'aiModelId', 'aiApiKey', 'aiPrompt'],
       function(data) {
@@ -181,6 +183,7 @@ function collectConfig() {
     threadCount: parseInt(elements.threadCount.value) || DEFAULT_THREAD_COUNT,
     retryCount: parseInt(elements.retryCount.value) || DEFAULT_RETRY_COUNT,
     autoSelect: elements.autoSelect.checked,
+    sendCredentials: elements.sendCredentials.checked,
     enabledExtensions: enabledExtensions,
     // 代理配置
     proxyEnable: elements.proxyEnable.checked,
@@ -295,6 +298,7 @@ function resetToDefaults() {
   elements.threadCount.value = DEFAULT_THREAD_COUNT;
   elements.retryCount.value = DEFAULT_RETRY_COUNT;
   elements.autoSelect.checked = DEFAULT_AUTO_SELECT;
+  elements.sendCredentials.checked = DEFAULT_SEND_CREDENTIALS;
 
   elements.proxyEnable.checked = false;
   elements.proxyType.value = 'http';

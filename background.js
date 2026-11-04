@@ -818,13 +818,59 @@ async function fetchM3u8Content(url, headers) {
  * hls.example.com，分片在 cdn.example.com），一旦限制 requestDomains，
  * 分片请求就拿不到 Referer，表现为预览黑屏。
  *
- * 之所以敢放开范围，是因为现在只注入 Referer（见 popup.js 的 previewHeaders），
- * Cookie / Authorization 等凭证不再进入规则。
+ * 用 initiatorDomains = 扩展 ID，把规则限定为「只作用于本扩展自己发起的请求」：
+ * 预览是 popup（扩展页）发起的，没有 tabId，这是唯一能同时覆盖跨域分片、
+ * 又不影响其它标签页/站点的方式（参考猫爪的做法）。
+ * Chrome 101 以下不支持该字段，退化为不限定来源。
  */
-function buildRequestHeaderCondition() {
-  return {
+function supportsInitiatorDomains() {
+  const match = /Chrome\/(\d+)/.exec(navigator.userAgent || '');
+  return !!match && parseInt(match[1], 10) >= 101;
+}
+
+async function buildRequestHeaderCondition() {
+  const condition = {
     resourceTypes: ['xmlhttprequest', 'media']
   };
+  // initiatorDomains / excludedRequestDomains 都是 Chrome 101+ 才支持的字段
+  if (chrome.runtime.id && supportsInitiatorDomains()) {
+    condition.initiatorDomains = [chrome.runtime.id];
+    const excluded = await collectExcludedHosts();
+    if (excluded.length > 0) {
+      condition.excludedRequestDomains = excluded;
+    }
+  }
+  return condition;
+}
+
+/**
+ * 收集「不能注入预览请求头」的域名。
+ *
+ * 预览规则会对扩展发起的所有 XHR / media 请求生效，包括本扩展自己调用的其它接口：
+ *   - server     你的 NAS。建任务靠 Cookie 里的 auth_token 鉴权，被视频站的
+ *                Cookie 覆盖会直接 401（「请先登录」）。
+ *   - aiBaseUrl  AI 翻译接口。视频站的 Cookie / Authorization 不该发给第三方。
+ * 用 excludedRequestDomains 把这两个域名排除掉；规则本身仍然不限目标域名，
+ * 这样跨域 CDN 的分片也能拿到 Referer / Cookie，预览不会黑屏。
+ */
+async function collectExcludedHosts() {
+  try {
+    const data = await chrome.storage.sync.get(['server', 'aiBaseUrl']);
+    const hosts = [];
+    for (const raw of [data.server, data.aiBaseUrl]) {
+      if (!raw) continue;
+      try {
+        const hostname = new URL(raw).hostname;
+        if (hostname) hosts.push(hostname);
+      } catch (e) {
+        // 地址还没填好或格式不对，跳过即可
+      }
+    }
+    return Array.from(new Set(hosts));
+  } catch (e) {
+    console.warn('[松鼠下载器] 读取排除域名失败:', e);
+    return [];
+  }
 }
 
 /**
@@ -832,6 +878,8 @@ function buildRequestHeaderCondition() {
  * 参考猫爪实现
  */
 async function setRequestHeaders(headers) {
+  // 条件里要读配置（排除 NAS / AI 域名），先算好再写规则
+  const condition = await buildRequestHeaderCondition();
   return new Promise((resolve) => {
     // 先清除旧规则
     chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [1] }, function() {
@@ -842,6 +890,7 @@ async function setRequestHeaders(headers) {
 
       // 添加新规则
       const rules = {
+        // 排除 NAS 与 AI 接口，避免预览用的凭证覆盖它们的鉴权头（见 collectExcludedHosts）
         addRules: [{
           id: 1,
           priority: 1,
@@ -853,7 +902,7 @@ async function setRequestHeaders(headers) {
               value: headers[key]
             }))
           },
-          condition: buildRequestHeaderCondition()
+          condition: condition
         }],
         removeRuleIds: [1]
       };

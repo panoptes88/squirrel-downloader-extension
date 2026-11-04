@@ -158,6 +158,13 @@
         </label>
         <p class="help">自动选择最佳视频和音频流，避免交互式选择菜单</p>
       </div>
+      <div class="form-group">
+        <label>
+          <input type="checkbox" id="sendCredentials">
+          随下载任务发送原站凭证
+        </label>
+        <p class="help">默认只发送 Referer。若远程下载器下载时报 403，可以开启此项（会附带 Cookie / Authorization / User-Agent 等请求头），或给下载器配置与浏览器相同的代理。</p>
+      </div>
     </section>
 
     <!-- 保存提示 -->

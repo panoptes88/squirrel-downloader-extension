@@ -20,3 +20,6 @@ const DEFAULT_AI_PROMPT = `你是视频标题翻译助手。将 <title> 内的�
 const DEFAULT_THREAD_COUNT = 32;
 const DEFAULT_RETRY_COUNT = 15;
 const DEFAULT_AUTO_SELECT = true;
+// 是否随下载任务发送原站凭证（Cookie / Authorization 等）。默认关闭，
+// 只有远程下载器因缺少登录态返回 403 时才需要打开。
+const DEFAULT_SEND_CREDENTIALS = false;
