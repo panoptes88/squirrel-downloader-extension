@@ -28,6 +28,7 @@ const elements = {
   aiTranslateEnable: document.getElementById('aiTranslateEnable'),
   aiTranslateSettings: document.getElementById('aiTranslateSettings'),
   aiBaseUrl: document.getElementById('aiBaseUrl'),
+  aiBaseUrlPreview: document.getElementById('aiBaseUrlPreview'),
   aiModelId: document.getElementById('aiModelId'),
   aiApiKey: document.getElementById('aiApiKey'),
   aiPrompt: document.getElementById('aiPrompt'),
@@ -111,6 +112,7 @@ async function init() {
 
   // 显示/隐藏 AI 翻译设置
   toggleAiTranslateSettings();
+  updateAiBaseUrlPreview();
 
   // 渲染资源类型网格
   renderExtGrid(config.enabledExtensions);
@@ -317,6 +319,7 @@ function resetToDefaults() {
   toggleProxySettings();
   toggleProxyAuthSettings();
   toggleAiTranslateSettings();
+  updateAiBaseUrlPreview();
   setDirty(true);
   showSaveResult('已恢复默认值，点击「保存配置」生效', 'error');
 }
@@ -369,6 +372,9 @@ function bindEvents() {
 
   // AI 翻译启用切换
   elements.aiTranslateEnable.addEventListener('change', toggleAiTranslateSettings);
+
+  // AI Base URL 变化时实时刷新“实际请求地址”预览
+  elements.aiBaseUrl.addEventListener('input', updateAiBaseUrlPreview);
 
   // 测试 AI 翻译按钮
   elements.btnTestAi.addEventListener('click', handleTestAiTranslate);
@@ -511,10 +517,45 @@ async function handleTestAiTranslate() {
 }
 
 /**
+ * 拼接 chat/completions 地址。
+ * 用户经常把完整 endpoint 粘进 Base URL，这里兼容去掉末尾的 /v1/chat/completions，
+ * 避免拼成 .../v1/chat/completions/v1/chat/completions。
+ */
+function buildChatCompletionsUrl(baseUrl) {
+  const base = (baseUrl || '')
+    .trim()
+    .replace(/\/+$/, '')
+    .replace(/\/v1\/chat\/completions$/i, '')
+    .replace(/\/+$/, '');
+  return base + '/v1/chat/completions';
+}
+
+/**
+ * 实时显示实际请求地址，提醒 Base URL 不需要包含 /v1/chat/completions
+ */
+function updateAiBaseUrlPreview() {
+  const preview = elements.aiBaseUrlPreview;
+  if (!preview) return;
+
+  const raw = elements.aiBaseUrl.value.trim();
+  if (!raw) {
+    preview.textContent = '实际请求地址：https://你的域名/v1/chat/completions';
+    preview.classList.remove('warn');
+    return;
+  }
+
+  const trimmed = raw.replace(/\/+$/, '');
+  const hadEndpoint = /\/v1\/chat\/completions$/i.test(trimmed);
+  preview.textContent = '实际请求地址：' + buildChatCompletionsUrl(raw)
+    + (hadEndpoint ? '（已自动去掉多余的 /v1/chat/completions）' : '');
+  preview.classList.toggle('warn', hadEndpoint);
+}
+
+/**
  * 调用 AI 翻译 API
  */
 async function callAiTranslate(text, baseUrl, modelId, apiKey, prompt) {
-  const url = `${baseUrl}/v1/chat/completions`;
+  const url = buildChatCompletionsUrl(baseUrl);
 
   const systemPrompt = applyPromptTemplate(prompt, text);
 

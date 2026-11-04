@@ -223,6 +223,19 @@ body {
   color: var(--text-sub);
 }
 
+/* 实际请求地址预览：等宽字体 + 可换行，避免长 URL 撑破表单 */
+.form-group .url-preview {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--text-faint);
+  word-break: break-all;
+}
+
+/* 用户把完整 endpoint 粘进来时用警示色，并提示已自动去掉 */
+.form-group .url-preview.warn {
+  color: var(--danger);
+}
+
 .form-row {
   display: flex;
   gap: 14px;

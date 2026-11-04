@@ -1227,7 +1227,7 @@ async function handleTranslate() {
  * 调用 AI 翻译 API
  */
 async function callAiTranslate(text) {
-  const url = `${aiTranslateConfig.baseUrl}/v1/chat/completions`;
+  const url = buildChatCompletionsUrl(aiTranslateConfig.baseUrl);
 
   const prompt = applyPromptTemplate(aiTranslateConfig.prompt, text);
 
@@ -1289,6 +1289,20 @@ function applyPromptTemplate(template, text) {
   const tpl = template || DEFAULT_AI_PROMPT;
   if (!tpl.includes('{text}')) return `${tpl}\n\n${text}`;
   return tpl.replace('{text}', () => text);
+}
+
+/**
+ * 拼接 chat/completions 地址。
+ * 用户经常把完整 endpoint 粘进 Base URL，这里兼容去掉末尾的 /v1/chat/completions，
+ * 避免拼成 .../v1/chat/completions/v1/chat/completions。
+ */
+function buildChatCompletionsUrl(baseUrl) {
+  const base = (baseUrl || '')
+    .trim()
+    .replace(/\/+$/, '')
+    .replace(/\/v1\/chat\/completions$/i, '')
+    .replace(/\/+$/, '');
+  return base + '/v1/chat/completions';
 }
 
 /**

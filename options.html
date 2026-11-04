@@ -110,7 +110,8 @@
         <div class="form-group">
           <label for="aiBaseUrl">API Base URL</label>
           <input type="text" id="aiBaseUrl" placeholder="https://api.gpt.ge">
-          <p class="help">OpenAI 兼容的 API 地址</p>
+          <p class="help">OpenAI 兼容的 API 根地址，不需要包含 /v1/chat/completions</p>
+          <p class="help url-preview" id="aiBaseUrlPreview">实际请求地址：—</p>
         </div>
         <div class="form-group">
           <label for="aiModelId">模型 ID</label>
