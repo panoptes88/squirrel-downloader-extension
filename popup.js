@@ -19,6 +19,15 @@ let resourceKeys = new Set();
 let pendingResources = [];
 let pendingAppendTimer = null;
 const RESOURCE_APPEND_DELAY = 120;
+// AI 翻译请求超时（毫秒）：模型通常几秒返回，但不能无限等
+const AI_TIMEOUT_MS = 30000;
+
+/**
+ * AbortSignal.timeout() 触发时 reject 的是 TimeoutError，手动 abort 是 AbortError。
+ */
+function isTimeoutError(e) {
+  return !!e && (e.name === 'TimeoutError' || e.name === 'AbortError');
+}
 // 服务器配置
 let serverConfig = {
   server: '',
@@ -1142,6 +1151,7 @@ async function handleTranslate() {
 
   let successCount = 0;
   let failCount = 0;
+  let firstError = '';
 
   for (const index of indicesToTranslate) {
     const resource = resources[index];
@@ -1170,6 +1180,9 @@ async function handleTranslate() {
       console.log(`[翻译] #${index} 成功: "${title}" → "${translatedTitle}"`);
     } catch (e) {
       console.error(`[翻译] #${index} 失败:`, e.message);
+      if (!firstError) {
+        firstError = isTimeoutError(e) ? '请求超时（30 秒），请检查 AI 服务' : e.message;
+      }
       failCount++;
     }
   }
@@ -1191,6 +1204,9 @@ async function handleTranslate() {
 
   if (failCount === 0) {
     showToast(`成功翻译 ${successCount} 个标题`, 'success');
+  } else if (successCount === 0 && firstError) {
+    // 全部失败时把原因带上，否则用户只看到"0 成功"
+    showToast(`翻译失败: ${firstError}`, 'error');
   } else {
     showToast(`${successCount} 成功，${failCount} 失败`, 'error');
   }
@@ -1209,6 +1225,7 @@ async function callAiTranslate(text) {
 
   const response = await fetch(url, {
     method: 'POST',
+    signal: AbortSignal.timeout(AI_TIMEOUT_MS),
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${aiTranslateConfig.apiKey}`

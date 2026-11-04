@@ -43,6 +43,16 @@ const elements = {
 // 是否有未保存的修改
 let isDirty = false;
 
+// AI 测试请求超时（毫秒）：模型通常几秒返回，但不能无限等
+const AI_TIMEOUT_MS = 30000;
+
+/**
+ * AbortSignal.timeout() 触发时 reject 的是 TimeoutError，手动 abort 是 AbortError。
+ */
+function isTimeoutError(e) {
+  return !!e && (e.name === 'TimeoutError' || e.name === 'AbortError');
+}
+
 // 默认支持的资源类型
 // 默认勾选的嗅探类型。与 background.js 里的 DEFAULT_ENABLED_EXTENSIONS 保持一致
 // （service worker 不是 module，无法复用，改动时请两处同步）。
@@ -407,7 +417,8 @@ async function handleTestAiTranslate() {
     const translatedText = await callAiTranslate(testText, baseUrl, modelId, apiKey, prompt);
     showAiTestResult(`翻译成功！"${testText}" → "${translatedText}"`, 'success');
   } catch (e) {
-    showAiTestResult(`翻译失败: ${e.message}`, 'error');
+    const message = isTimeoutError(e) ? '请求超时（30 秒），请检查 AI 服务' : e.message;
+    showAiTestResult(`翻译失败: ${message}`, 'error');
   } finally {
     elements.btnTestAi.disabled = false;
     elements.btnTestAi.querySelector('.btn-label').textContent = '测试翻译';
@@ -424,6 +435,7 @@ async function callAiTranslate(text, baseUrl, modelId, apiKey, prompt) {
 
   const response = await fetch(url, {
     method: 'POST',
+    signal: AbortSignal.timeout(AI_TIMEOUT_MS),
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`

@@ -30,6 +30,19 @@ const state = {
 
 // 每个 tab 最多保留的资源条数，超出时丢弃最早的（分片站点很容易刷出成百上千条）
 const MAX_RESOURCES_PER_TAB = 100;
+
+// 网络请求超时（毫秒）。没有超时时，服务器/NAS 不响应会让 fetch 一直挂着，
+// 界面停在"登录中/发送中"，既不报错也没有任何反馈。
+const LOGIN_TIMEOUT_MS = 10000;
+const TASK_TIMEOUT_MS = 15000;
+const M3U8_TIMEOUT_MS = 15000;
+
+/**
+ * AbortSignal.timeout() 触发时 reject 的是 TimeoutError，手动 abort 是 AbortError。
+ */
+function isTimeoutError(e) {
+  return !!e && (e.name === 'TimeoutError' || e.name === 'AbortError');
+}
 // 资源落盘（storage.session）的防抖定时器，按 tabId 区分
 const persistTimers = new Map();
 // 正在从 session 恢复的 tab，避免并发重复读
@@ -620,7 +633,8 @@ async function loginAndSaveCookie(server, username, password) {
     const response = await fetch(loginUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password })
+      body: JSON.stringify({ username, password }),
+      signal: AbortSignal.timeout(LOGIN_TIMEOUT_MS)
     });
 
     console.log('[松鼠下载器] 登录响应状态:', response.status);
@@ -672,7 +686,12 @@ async function loginAndSaveCookie(server, username, password) {
     return { success: true, user: data, token: token };
   } catch (e) {
     console.error('[松鼠下载器] 登录异常:', e);
-    return { success: false, error: '无法连接到服务器: ' + e.message };
+    return {
+      success: false,
+      error: isTimeoutError(e)
+        ? '连接服务器超时（10 秒），请检查服务器是否在线'
+        : '无法连接到服务器: ' + e.message
+    };
   }
 }
 
@@ -730,7 +749,8 @@ async function sendDownloadTask(server, auth, task) {
     const taskResp = await fetch(taskUrl, {
       method: 'POST',
       headers: headers,
-      body: JSON.stringify(task)
+      body: JSON.stringify(task),
+      signal: AbortSignal.timeout(TASK_TIMEOUT_MS)
     });
 
     if (taskResp.ok) {
@@ -741,7 +761,12 @@ async function sendDownloadTask(server, auth, task) {
       return { success: false, error: err.error || '创建任务失败' };
     }
   } catch (e) {
-    return { success: false, error: '请求失败: ' + e.message };
+    return {
+      success: false,
+      error: isTimeoutError(e)
+        ? '请求服务器超时（15 秒），任务可能已提交，请稍后到服务器确认'
+        : '请求失败: ' + e.message
+    };
   }
 }
 
@@ -766,6 +791,7 @@ async function fetchM3u8Content(url, headers) {
 
     console.log('[松鼠下载器] 代理请求:', url.replace(/\?.*$/, ''));
 
+    fetchOptions.signal = AbortSignal.timeout(M3U8_TIMEOUT_MS);
     const response = await fetch(url, fetchOptions);
 
     if (!response.ok) {
@@ -780,7 +806,10 @@ async function fetchM3u8Content(url, headers) {
     return { success: true, data: text, contentType: contentType };
   } catch (e) {
     console.error('[松鼠下载器] 代理请求失败:', e);
-    return { success: false, error: e.message };
+    return {
+      success: false,
+      error: isTimeoutError(e) ? '拉取 m3u8 超时（15 秒）' : e.message
+    };
   }
 }
 
