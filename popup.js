@@ -13,6 +13,12 @@ let selectedIndices = new Set();
 let openPanels = new Set();
 // 正在预览的 hls.js 实例，按资源索引存放（用于销毁，避免后台持续拉流）
 const hlsInstances = new Map();
+// 已渲染资源的去重键（URL 去掉 query），与 background 的 addResource 规则一致
+let resourceKeys = new Set();
+// 新资源合并队列：分片站点可能瞬间发来大量 resourceAdded
+let pendingResources = [];
+let pendingAppendTimer = null;
+const RESOURCE_APPEND_DELAY = 120;
 // 服务器配置
 let serverConfig = {
   server: '',
@@ -123,8 +129,8 @@ async function init() {
   // 监听来自 background 的资源更新消息
   chrome.runtime.onMessage.addListener(function(message) {
     if (message.type === 'resourceAdded' && message.tabId === currentTabId) {
-      // 新资源添加，重新加载资源列表
-      loadResources();
+      // 增量插入单条，不重建列表——重建会销毁正在播放的预览
+      queueResource(message.resource);
     }
   });
 
@@ -299,11 +305,24 @@ async function loadResources() {
       { type: 'getResources', tabId: currentTabId },
       function(response) {
         isLoadingResources = wasLoading;
+        // 先把合并窗口里等待插入的资源落下，避免被下面的全量快照覆盖
+        flushPendingResources();
         if (chrome.runtime.lastError) {
           console.error('Error loading resources:', chrome.runtime.lastError);
           resources = [];
         } else {
-          resources = response?.resources || [];
+          // 快照可能比本地已插入的资源旧（请求发出后又有新资源到达），
+          // 按 URL 合并，保留快照里没有的本地条目
+          const snapshot = response?.resources || [];
+          const snapshotKeys = new Set(snapshot.map(resource => resource.url.split('?')[0]));
+          resources.forEach(resource => {
+            const key = resource.url.split('?')[0];
+            if (!snapshotKeys.has(key)) {
+              snapshotKeys.add(key);
+              snapshot.push(resource);
+            }
+          });
+          resources = snapshot;
         }
         renderResources();
         resolve();
@@ -333,51 +352,27 @@ function updateResourceNames() {
 }
 
 /**
- * 渲染资源列表
+ * 生成单条资源面板的 HTML。
+ * 全量渲染与增量插入共用，保证两条路径产出完全一致。
+ * @param {object} resource 资源对象
+ * @param {number} index 在 resources 中的下标
+ * @param {Set<string>} loadedPanels 已加载过详情面板的下标集合（字符串形式）
  */
-function renderResources() {
-  // 更新计数
-  elements.resourceCount.textContent = `${resources.length} 个资源`;
+function buildResourcePanelHtml(resource, index, loadedPanels) {
+  const ext = resource.ext || 'unknown';
+  const originalTitle = resource.originalTitle || resource.title || getFileName(resource.url);
+  const fileName = resource.translatedTitle || originalTitle;
+  const sizeStr = resource.size > 0 ? formatSize(resource.size) : '';
+  const isSelected = selectedIndices.has(index);
+  const isM3u8 = ['m3u8', 'm3u'].includes(ext);
+  const isPlayable = isM3u8 || ext === 'mp4';
+  // 展开状态在重新渲染后保留
+  const isOpen = openPanels.has(index);
+  const titleAttr = resource.translatedTitle
+    ? `${escapeHtml(originalTitle)}\n${escapeHtml(resource.translatedTitle)}`
+    : escapeHtml(resource.url);
 
-  // 空状态
-  if (resources.length === 0) {
-    // 拉取过程中保持"正在检测"，否则还原默认文案
-    if (!isLoadingResources) {
-      setStatusMessage(STATUS_MESSAGE, STATUS_HINT);
-    }
-    elements.resourceList.innerHTML = '';
-    elements.resourceList.appendChild(elements.emptyState);
-    elements.emptyState.style.display = 'block';
-    return;
-  }
-
-  elements.emptyState.style.display = 'none';
-
-  // 重新渲染前记住哪些面板已经加载过内容，避免重建后出现空面板
-  const loadedPanels = new Set();
-  elements.resourceList.querySelectorAll('.media-info').forEach(mediaInfo => {
-    if (mediaInfo.dataset.loaded === 'true') {
-      const index = mediaInfo.id.replace('media-info-', '');
-      loadedPanels.add(index);
-    }
-  });
-
-  // 生成列表 HTML
-  const html = resources.map((resource, index) => {
-    const ext = resource.ext || 'unknown';
-    const originalTitle = resource.originalTitle || resource.title || getFileName(resource.url);
-    const fileName = resource.translatedTitle || originalTitle;
-    const sizeStr = resource.size > 0 ? formatSize(resource.size) : '';
-    const isSelected = selectedIndices.has(index);
-    const isM3u8 = ['m3u8', 'm3u'].includes(ext);
-    const isPlayable = isM3u8 || ext === 'mp4';
-    // 展开状态在重新渲染后保留
-    const isOpen = openPanels.has(index);
-    const titleAttr = resource.translatedTitle
-      ? `${escapeHtml(originalTitle)}\n${escapeHtml(resource.translatedTitle)}`
-      : escapeHtml(resource.url);
-
-    return `
+  return `
       <div class="resource-panel${isOpen ? ' open' : ''}" data-index="${index}">
         <div class="panel-heading">
           <input type="checkbox" class="check-item" ${isSelected ? 'checked' : ''} data-index="${index}" aria-label="选择该资源">
@@ -395,10 +390,118 @@ function renderResources() {
         </div>
       </div>
     `;
-  }).join('');
+}
+
+/**
+ * 渲染资源列表（全量重建）。
+ * 会销毁 <video> 及挂在上面的 hls 实例，只能用于初始化、刷新、页面跳转
+ * 等确实需要全量的场景；新资源到达请走 appendResource()。
+ */
+function renderResources() {
+  elements.resourceCount.textContent = `${resources.length} 个资源`;
+
+  // 空状态
+  if (resources.length === 0) {
+    // 拉取过程中保持"正在检测"，否则还原默认文案
+    if (!isLoadingResources) {
+      setStatusMessage(STATUS_MESSAGE, STATUS_HINT);
+    }
+    elements.resourceList.innerHTML = '';
+    elements.resourceList.appendChild(elements.emptyState);
+    elements.emptyState.style.display = 'block';
+    // 列表清空时丢弃还没插入的新资源，避免清空后又冒出来
+    resetResourceQueue();
+    resourceKeys = new Set();
+    return;
+  }
+
+  elements.emptyState.style.display = 'none';
+
+  // 重新渲染前记住哪些面板已经加载过内容，避免重建后出现空面板
+  const loadedPanels = new Set();
+  elements.resourceList.querySelectorAll('.media-info').forEach(mediaInfo => {
+    if (mediaInfo.dataset.loaded === 'true') {
+      const index = mediaInfo.id.replace('media-info-', '');
+      loadedPanels.add(index);
+    }
+  });
+
+  // 生成列表 HTML
+  const html = resources.map((resource, index) =>
+    buildResourcePanelHtml(resource, index, loadedPanels)
+  ).join('');
 
   elements.resourceList.innerHTML = html;
+  // 重建去重集合，供后续增量插入判断
+  resourceKeys = new Set(resources.map(resource => resource.url.split('?')[0]));
   updateSelectedCount();
+}
+
+/**
+ * 增量追加一条资源。
+ * 只往列表末尾插入单条面板，不重建已有节点——重建会销毁正在播放的
+ * <video> 及其上的 hls 实例。
+ * @returns {boolean} 是否真的插入了（重复项返回 false）
+ */
+function appendResource(resource) {
+  if (!resource || !resource.url) return false;
+
+  const key = resource.url.split('?')[0]; // 与 background 的去重规则一致
+  if (resourceKeys.has(key)) return false;
+  resourceKeys.add(key);
+
+  const index = resources.length;
+  resources.push(resource);
+
+  // 第一条资源：清掉空状态占位
+  if (index === 0) {
+    elements.resourceList.innerHTML = '';
+  }
+
+  elements.resourceList.insertAdjacentHTML(
+    'beforeend',
+    buildResourcePanelHtml(resource, index, new Set())
+  );
+  elements.resourceCount.textContent = `${resources.length} 个资源`;
+  updateSelectedCount();
+  return true;
+}
+
+/**
+ * 插入等待队列中的资源，返回实际插入条数。
+ */
+function flushPendingResources() {
+  pendingAppendTimer = null;
+  if (pendingResources.length === 0) return 0;
+  const batch = pendingResources;
+  pendingResources = [];
+  let added = 0;
+  batch.forEach(resource => {
+    if (appendResource(resource)) added++;
+  });
+  return added;
+}
+
+/**
+ * 新资源入队，在合并窗口内攒成一批再插入。
+ * 分片站点一秒可能发来几十条 resourceAdded，逐条插入会让列表不断重排。
+ */
+function queueResource(resource) {
+  if (!resource) return;
+  pendingResources.push(resource);
+  if (pendingAppendTimer) return;
+  pendingAppendTimer = setTimeout(flushPendingResources, RESOURCE_APPEND_DELAY);
+}
+
+/**
+ * 丢弃等待队列（清空列表时调用）。
+ */
+function resetResourceQueue() {
+  pendingResources = [];
+  if (pendingAppendTimer) {
+    clearTimeout(pendingAppendTimer);
+    pendingAppendTimer = null;
+  }
 }
 
 /**
