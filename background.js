@@ -326,11 +326,10 @@ function trimTabResources(resources) {
  * 刻意不落盘 Cookie / Authorization / x-* 等凭证——预览只用 Referer。
  */
 function toStoredResource(resource) {
-  let referer = '';
-  if (resource.headers) {
-    const match = /^referer:\s*(.+)$/im.exec(resource.headers);
-    if (match) referer = match[1].trim();
-  }
+  // 完整保留请求头。早先只抠出 Referer 存，导致 popup 从 session 恢复的资源
+  // 没有 Cookie / User-Agent——预览拿不到登录态，「随下载任务发送原站凭证」
+  // 也自然没有东西可发。
+  // storage.session 只存在内存里、浏览器关闭即清空，不会落盘。
   return {
     url: resource.url,
     ext: resource.ext,
@@ -338,7 +337,7 @@ function toStoredResource(resource) {
     contentType: resource.contentType,
     title: resource.title,
     timestamp: resource.timestamp,
-    headers: referer ? 'Referer: ' + referer : ''
+    headers: resource.headers || ''
   };
 }
 
@@ -429,11 +428,25 @@ function dropTabResources(tabId) {
   }
 }
 
+// 请求头缓存的 session 键：按 URL 存。
+// 只按 requestId 存内存 Map 是不可靠的——MV3 的 Service Worker 可能在
+// onSendHeaders 与 onResponseStarted 之间被回收，届时 Map 已清空，
+// 嗅探到的资源就没有 Cookie / User-Agent，表现为「随下载任务发送原站凭证」
+// 没有东西可发，最终只发出 Referer。
+function requestHeadersKey(url) {
+  return 'reqHeaders:' + url;
+}
+
 // 监听请求头
 chrome.webRequest.onSendHeaders.addListener(
   function(details) {
-    if (details.requestHeaders) {
-      state.requestHeaders.set(details.requestId, details.requestHeaders);
+    if (!details.requestHeaders) return;
+    state.requestHeaders.set(details.requestId, details.requestHeaders);
+    if (details.url) {
+      // 持久化兜底：SW 被回收后仍能按 URL 取回
+      chrome.storage.session
+        .set({ [requestHeadersKey(details.url)]: details.requestHeaders })
+        .catch(function() {});
     }
   },
   { urls: ['<all_urls>'] },
@@ -442,7 +455,7 @@ chrome.webRequest.onSendHeaders.addListener(
 
 // 监听响应 - 只监听媒体资源类型
 chrome.webRequest.onResponseStarted.addListener(
-  function(details) {
+  async function(details) {
     try {
       const url = details.url;
       if (shouldIgnoreUrl(url)) return;
@@ -459,10 +472,20 @@ chrome.webRequest.onResponseStarted.addListener(
       // 判断是否为媒体资源
       if (!isMediaResource(url, contentType)) return;
 
-      // 获取请求头
-      const requestHeaders = state.requestHeaders.get(details.requestId);
-      const headersStr = extractHeaders(requestHeaders);
+      // 获取请求头：先查内存快路径，取不到再按 URL 从 session 兜底
+      let requestHeaders = state.requestHeaders.get(details.requestId);
       state.requestHeaders.delete(details.requestId);
+      const headerKey = requestHeadersKey(url);
+      // session 的写入是异步的，而 onResponseStarted 可能紧随其后触发，
+      // 因此偶尔会读不到。短暂重试几次（总共约 300ms）足够覆盖这个窗口。
+      for (let attempt = 0; !requestHeaders && attempt < 6; attempt++) {
+        if (attempt > 0) await new Promise(r => setTimeout(r, 50));
+        const stored = await chrome.storage.session.get([headerKey]);
+        requestHeaders = stored[headerKey];
+      }
+      const headersStr = extractHeaders(requestHeaders);
+      // 用过即删，避免 session 里越积越多
+      chrome.storage.session.remove(headerKey).catch(function() {});
 
       // 获取文件大小
       let size = 0;
@@ -515,6 +538,14 @@ chrome.webRequest.onResponseStarted.addListener(
 );
 
 // 清理失败请求的请求头
+// 失败/取消的请求不会有 onResponseStarted，这里顺手清掉缓存
+chrome.webRequest.onErrorOccurred.addListener(
+  function(details) {
+    if (details.url) chrome.storage.session.remove(requestHeadersKey(details.url)).catch(function() {});
+  },
+  { urls: ['<all_urls>'] }
+);
+
 chrome.webRequest.onErrorOccurred.addListener(
   function(details) {
     state.requestHeaders.delete(details.requestId);
