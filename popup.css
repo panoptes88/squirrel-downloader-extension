@@ -601,7 +601,8 @@ body {
 /* ===== Toast ===== */
 .toast {
   position: fixed;
-  bottom: 24px;
+  /* 抬到底栏之上：底栏约 57px 高，24px 会让 toast 压在发送按钮上 */
+  bottom: 72px;
   left: 50%;
   transform: translateX(-50%) translateY(8px);
   display: flex;
