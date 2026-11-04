@@ -28,6 +28,13 @@ const state = {
   enabledExtensions: null
 };
 
+// 每个 tab 最多保留的资源条数，超出时丢弃最早的（分片站点很容易刷出成百上千条）
+const MAX_RESOURCES_PER_TAB = 100;
+// 资源落盘（storage.session）的防抖定时器，按 tabId 区分
+const persistTimers = new Map();
+// 正在从 session 恢复的 tab，避免并发重复读
+const restoringTabs = new Map();
+
 /**
  * 一次性迁移：旧版本的默认值是「全部启用」，其中包含 TS。
  * 只有在用户从未改动过默认值（存下来的正好是旧的全集）时才替换成新默认。
@@ -79,15 +86,16 @@ async function loadEnabledExtensions() {
 loadEnabledExtensions();
 
 
-// 定期清理 declarativeNetRequest 规则（每5分钟）
-setInterval(function() {
-  chrome.declarativeNetRequest.getSessionRules(function(rules) {
-    if (rules.length > 0) {
-      console.log('[松鼠下载器] 清理 session rules:', rules.length);
-      chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: rules.map(r => r.id) });
-    }
-  });
-}, 5 * 60 * 1000);
+// Service Worker 每次启动时清理残留的预览请求头规则。
+// 原来的 setInterval 在 MV3 里活不过空闲回收，等于永远不会执行；
+// popup 正常关闭会自己清，这里兜底 popup 崩溃/被强杀留下的规则。
+chrome.declarativeNetRequest.getSessionRules(function(rules) {
+  chrome.runtime.lastError; // 读取错误时静默忽略
+  if (Array.isArray(rules) && rules.length > 0) {
+    console.log('[松鼠下载器] 启动清理残留 session rules:', rules.length);
+    chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: rules.map(r => r.id) });
+  }
+});
 
 // 监听配置变化
 chrome.storage.onChanged.addListener(function(changes) {
@@ -281,12 +289,132 @@ function addResource(tabId, resource) {
 
   if (!resources.has(key)) {
     resources.set(key, resource);
+    trimTabResources(resources);
+    schedulePersist(tabId);
     // 通知 popup 更新（如果打开的话）
     chrome.runtime.sendMessage({
       type: 'resourceAdded',
       tabId,
       resource
     }).catch(() => {});
+  }
+}
+
+/**
+ * 超出上限时丢弃最早的资源（Map 的迭代顺序即插入顺序）。
+ */
+function trimTabResources(resources) {
+  while (resources.size > MAX_RESOURCES_PER_TAB) {
+    const oldestKey = resources.keys().next().value;
+    resources.delete(oldestKey);
+  }
+}
+
+/**
+ * 只保留预览/下载用得到的字段。
+ * 刻意不落盘 Cookie / Authorization / x-* 等凭证——预览只用 Referer。
+ */
+function toStoredResource(resource) {
+  let referer = '';
+  if (resource.headers) {
+    const match = /^referer:\s*(.+)$/im.exec(resource.headers);
+    if (match) referer = match[1].trim();
+  }
+  return {
+    url: resource.url,
+    ext: resource.ext,
+    size: resource.size,
+    contentType: resource.contentType,
+    title: resource.title,
+    timestamp: resource.timestamp,
+    headers: referer ? 'Referer: ' + referer : ''
+  };
+}
+
+function sessionKey(tabId) {
+  return 'tabResources:' + tabId;
+}
+
+function hasSessionStorage() {
+  return !!(chrome.storage && chrome.storage.session);
+}
+
+/**
+ * 资源变化后延迟写盘，避免分片站点每条都触发一次存储写入。
+ */
+function schedulePersist(tabId) {
+  if (!hasSessionStorage()) return;
+  if (persistTimers.has(tabId)) return;
+  persistTimers.set(tabId, setTimeout(function() {
+    persistTimers.delete(tabId);
+    persistTabResources(tabId);
+  }, 200));
+}
+
+function persistTabResources(tabId) {
+  if (!hasSessionStorage()) return;
+  const resources = state.tabResources.get(tabId);
+  if (!resources || resources.size === 0) {
+    chrome.storage.session.remove(sessionKey(tabId)).catch(function() {});
+    return;
+  }
+  const list = Array.from(resources.values()).map(toStoredResource);
+  chrome.storage.session.set({ [sessionKey(tabId)]: list }).catch(function(e) {
+    console.warn('[松鼠下载器] 保存嗅探结果失败:', e && e.message);
+  });
+}
+
+/**
+ * 从 session 存储恢复某个 tab 的资源（Service Worker 被回收后 state 是空的）。
+ */
+async function ensureTabResourcesLoaded(tabId) {
+  if (!hasSessionStorage()) return;
+  if (restoringTabs.has(tabId)) return restoringTabs.get(tabId);
+  const task = (async function() {
+    try {
+      const key = sessionKey(tabId);
+      const data = await chrome.storage.session.get([key]);
+      const list = data && data[key];
+      if (!Array.isArray(list) || list.length === 0) return;
+
+      const merged = new Map();
+      list.forEach(function(item) {
+        if (item && item.url) merged.set(item.url.split('?')[0], item);
+      });
+      // 恢复期间可能已经有新资源进来，保留内存里较新的条目
+      const current = state.tabResources.get(tabId);
+      if (current) {
+        current.forEach(function(item, k) {
+          if (!merged.has(k)) merged.set(k, item);
+        });
+      }
+      trimTabResources(merged);
+      state.tabResources.set(tabId, merged);
+      console.log('[松鼠下载器] 从 session 恢复资源:', tabId, merged.size);
+    } catch (e) {
+      console.warn('[松鼠下载器] 恢复嗅探结果失败:', e && e.message);
+    }
+  })();
+  restoringTabs.set(tabId, task);
+  try {
+    await task;
+  } finally {
+    restoringTabs.delete(tabId);
+  }
+}
+
+/**
+ * 丢弃某个 tab 的资源：内存、待写盘定时器、session 存储一起清。
+ */
+function dropTabResources(tabId) {
+  state.tabResources.delete(tabId);
+  const timer = persistTimers.get(tabId);
+  if (timer) {
+    clearTimeout(timer);
+    persistTimers.delete(tabId);
+  }
+  if (hasSessionStorage()) {
+    chrome.storage.session.remove(sessionKey(tabId)).catch(function() {});
   }
 }
 
@@ -385,7 +513,7 @@ chrome.webRequest.onErrorOccurred.addListener(
 
 // Tab 关闭时清理资源
 chrome.tabs.onRemoved.addListener(function(tabId) {
-  state.tabResources.delete(tabId);
+  dropTabResources(tabId);
 });
 
 // 页面导航时清理资源（刷新或跳转）
@@ -396,7 +524,7 @@ chrome.webNavigation.onCommitted.addListener(function(details) {
     // 跳转：typed, link, auto_bookmark, auto_subframe, manual_subframe, generated, auto_toplevel, form_submit, keyword, keyword_generated
     const transitionTypes = ['reload', 'link', 'typed', 'form_submit', 'auto_bookmark', 'generated'];
     if (transitionTypes.includes(details.transitionType)) {
-      state.tabResources.delete(details.tabId);
+      dropTabResources(details.tabId);
       // 清理 declarativeNetRequest 规则
       chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [1] });
       console.log('[松鼠下载器] 页面刷新/跳转，清除资源和规则:', details.tabId);
@@ -420,16 +548,19 @@ chrome.tabs.onUpdated.addListener(function(tabId, changeInfo, tab) {
 chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
   if (message.type === 'getResources') {
     const tabId = message.tabId;
-    const resources = state.tabResources.get(tabId) || new Map();
-    sendResponse({
-      resources: Array.from(resources.values())
+    // Service Worker 可能刚被唤醒，内存里没有数据，先尝试从 session 恢复
+    ensureTabResourcesLoaded(tabId).then(function() {
+      const resources = state.tabResources.get(tabId) || new Map();
+      sendResponse({
+        resources: Array.from(resources.values())
+      });
     });
     return true;
   }
 
   if (message.type === 'clearResources') {
     const tabId = message.tabId;
-    state.tabResources.delete(tabId);
+    dropTabResources(tabId);
     sendResponse({ success: true });
     return true;
   }
