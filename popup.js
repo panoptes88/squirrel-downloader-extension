@@ -763,7 +763,8 @@ async function loadVideoInfo(index) {
       // 使用 declarativeNetRequest 设置请求头（参考猫爪）
       await new Promise((resolve) => {
         chrome.runtime.sendMessage(
-          { type: 'setRequestHeaders', headers: previewHeaders },
+          // 带上媒体 URL：规则按目标域名生效，才能约束到 popup 里 hls.js 的请求
+          { type: 'setRequestHeaders', headers: previewHeaders, url: resource.url },
           resolve
         );
       });

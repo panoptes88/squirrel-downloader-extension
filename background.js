@@ -602,7 +602,7 @@ chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
 
   if (message.type === 'setRequestHeaders') {
     // 设置请求头
-    setRequestHeaders(message.headers)
+    setRequestHeaders(message.headers, message.url)
       .then(() => sendResponse({ success: true }))
       .catch(err => sendResponse({ success: false, error: err.message }));
     return true;
@@ -828,19 +828,37 @@ function supportsInitiatorDomains() {
   return !!match && parseInt(match[1], 10) >= 101;
 }
 
-async function buildRequestHeaderCondition() {
+async function buildRequestHeaderCondition(mediaUrl) {
   const condition = {
     resourceTypes: ['xmlhttprequest', 'media']
   };
-  // initiatorDomains / excludedRequestDomains 都是 Chrome 101+ 才支持的字段
-  if (chrome.runtime.id && supportsInitiatorDomains()) {
-    condition.initiatorDomains = [chrome.runtime.id];
+
+  // 规则要对「预览时 hls.js 发出的请求」生效，而预览跑在 popup 页面里。
+  // 实测 initiatorDomains 用扩展 ID 匹配不上扩展页面发起的请求（main 分支没有
+  // 任何限制所以能预览，de6699f 加上 initiatorDomains 后预览就失效了），
+  // 因此改为按目标域名 requestDomains 限定：只影响发往媒体源站的请求。
+  if (supportsInitiatorDomains()) {
+    const host = hostnameOf(mediaUrl);
+    if (host) {
+      condition.requestDomains = [host];
+    }
+    // 双保险：无论如何都不碰 NAS 与 AI 接口
     const excluded = await collectExcludedHosts();
     if (excluded.length > 0) {
       condition.excludedRequestDomains = excluded;
     }
   }
   return condition;
+}
+
+/** 从 URL 里安全取出 hostname，取不到返回空串 */
+function hostnameOf(rawUrl) {
+  if (!rawUrl) return '';
+  try {
+    return new URL(rawUrl).hostname;
+  } catch (e) {
+    return '';
+  }
 }
 
 /**
@@ -877,9 +895,9 @@ async function collectExcludedHosts() {
  * 设置请求头（使用 declarativeNetRequest）
  * 参考猫爪实现
  */
-async function setRequestHeaders(headers) {
-  // 条件里要读配置（排除 NAS / AI 域名），先算好再写规则
-  const condition = await buildRequestHeaderCondition();
+async function setRequestHeaders(headers, mediaUrl) {
+  // 条件里要读媒体域名与排除域名，先算好再写规则
+  const condition = await buildRequestHeaderCondition(mediaUrl);
   return new Promise((resolve) => {
     // 先清除旧规则
     chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [1] }, function() {
