@@ -163,9 +163,9 @@ function renderExtGrid(enabledExtensions) {
 }
 
 /**
- * 保存配置
+ * 收集当前表单配置（只读表单，不落盘）
  */
-function saveConfig() {
+function collectConfig() {
   // 获取启用的扩展名
   const enabledExtensions = [];
   elements.extGrid.querySelectorAll('input[type="checkbox"]:checked').forEach(function(checkbox) {
@@ -196,10 +196,69 @@ function saveConfig() {
     aiPrompt: elements.aiPrompt.value
   };
 
+  return config;
+}
+
+/**
+ * 校验配置。
+ * 保存前就把明显不合法的值拦住，避免等到发送任务/测试连接时才报错。
+ * @returns {{fieldId: string, message: string}|null} 校验失败返回字段 id 与提示，通过返回 null
+ */
+function validateConfig(config) {
+  if (config.server) {
+    if (!/^https?:\/\//i.test(config.server)) {
+      return { fieldId: 'server', message: '服务器地址必须以 http:// 或 https:// 开头' };
+    }
+    try {
+      const url = new URL(config.server);
+      if (!url.hostname) throw new Error('no host');
+    } catch (e) {
+      return { fieldId: 'server', message: '服务器地址格式不正确，例如 http://192.168.1.100:21808' };
+    }
+  }
+
+  if (config.proxyEnable) {
+    if (!config.proxyHost) {
+      return { fieldId: 'proxyHost', message: '启用代理后必须填写代理地址' };
+    }
+    if (config.proxyHost.includes('://')) {
+      return { fieldId: 'proxyHost', message: '代理地址只填主机名或 IP，不要带 http:// 前缀' };
+    }
+    if (!Number.isInteger(config.proxyPort) || config.proxyPort < 1 || config.proxyPort > 65535) {
+      return { fieldId: 'proxyPort', message: '代理端口需为 1-65535 之间的整数' };
+    }
+  }
+
+  if (!Number.isInteger(config.threadCount) || config.threadCount < 1 || config.threadCount > 128) {
+    return { fieldId: 'threadCount', message: '线程数需为 1-128 之间的整数' };
+  }
+
+  if (!Number.isInteger(config.retryCount) || config.retryCount < 0 || config.retryCount > 100) {
+    return { fieldId: 'retryCount', message: '重试次数需为 0-100 之间的整数' };
+  }
+
+  if (config.aiTranslateEnable) {
+    if (!config.aiBaseUrl) {
+      return { fieldId: 'aiBaseUrl', message: '启用 AI 翻译后必须填写 API Base URL' };
+    }
+    if (!/^https?:\/\//i.test(config.aiBaseUrl)) {
+      return { fieldId: 'aiBaseUrl', message: 'API Base URL 必须以 http:// 或 https:// 开头' };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * 保存配置（调用前应先通过 validateConfig）
+ * @param {object} [config] 已收集/校验过的配置，省略时重新读表单
+ */
+function saveConfig(config) {
+  const data = config || collectConfig();
   return new Promise((resolve) => {
-    chrome.storage.sync.set(config, function() {
+    chrome.storage.sync.set(data, function() {
       setDirty(false);
-      resolve(config);
+      resolve(data);
     });
   });
 }
@@ -332,6 +391,13 @@ async function handleTest() {
     return;
   }
 
+  // 没有协议头时 fetch 只会抛 "Failed to fetch"，这里提前给出明确提示
+  if (!/^https?:\/\//i.test(server)) {
+    showTestResult('服务器地址必须以 http:// 或 https:// 开头', 'error');
+    elements.server.focus();
+    return;
+  }
+
   if (!username || !password) {
     showTestResult('请输入用户名和密码', 'error');
     return;
@@ -371,7 +437,19 @@ async function handleTest() {
  * 保存配置
  */
 async function handleSave() {
-  await saveConfig();
+  const config = collectConfig();
+  const invalid = validateConfig(config);
+  if (invalid) {
+    showSaveResult(invalid.message, 'error');
+    const field = document.getElementById(invalid.fieldId);
+    if (field) {
+      field.focus();
+      if (field.scrollIntoView) field.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+    return;
+  }
+
+  await saveConfig(config);
   showSaveResult('配置已保存', 'success');
 }
 
@@ -405,6 +483,13 @@ async function handleTestAiTranslate() {
 
   if (!baseUrl || !modelId || !apiKey) {
     showAiTestResult('请填写完整的 AI 配置', 'error');
+    return;
+  }
+
+  // 同服务器地址：缺少协议头时 fetch 只会报 "Failed to fetch"
+  if (!/^https?:\/\//i.test(baseUrl)) {
+    showAiTestResult('API Base URL 必须以 http:// 或 https:// 开头', 'error');
+    elements.aiBaseUrl.focus();
     return;
   }
 
