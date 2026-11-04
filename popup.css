@@ -99,6 +99,44 @@ body {
   .container {
     max-height: 100vh;
   }
+
+  /* 工具栏这一排在窄屏上会被按钮本身占满（刷新/清空/全选，开了 AI 翻译还多一个），
+     计数没有落脚点就会被顶到屏幕外。收紧间距，并允许换行兜底：
+     放得下时计数仍在同一行右对齐，放不下时整条落到第二行右对齐，而不是被裁掉。 */
+  .toolbar {
+    flex-wrap: wrap;
+    gap: 6px 4px;
+    padding: 8px 10px;
+  }
+
+  /* 窄屏下工具栏按钮只留图标：四个按钮都有 title + aria-label，去掉文字后
+     一排能省出 100px 左右，「N 个资源」稳稳留在同一行。
+     图标放大到 16px、内边距加大，弥补去掉文字后缩小的点击面积。 */
+  .toolbar .btn {
+    padding: 6px 8px;
+    white-space: nowrap;
+  }
+
+  .toolbar .btn .btn-label {
+    display: none;
+  }
+
+  /* 窄屏下按钮只显示图标，翻译进行中把「翻译中...」露出来作为唯一的文字反馈。
+     就算加上这几十字，一排也就 310px 上下，320px 的屏幕仍放得下；
+     真放不下还有上面的 flex-wrap 兜底，计数会换行而不是被裁掉。 */
+  .toolbar .btn.is-loading .btn-label {
+    display: inline;
+  }
+
+  .toolbar .btn svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .toolbar .proxy-toggle {
+    gap: 3px;
+    white-space: nowrap;
+  }
 }
 
 .hide {

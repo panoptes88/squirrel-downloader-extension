@@ -1027,7 +1027,10 @@ async function handleTranslate() {
   const btnTranslate = document.getElementById('btnTranslate');
   if (btnTranslate) {
     btnTranslate.disabled = true;
-    btnTranslate.querySelector('.btn-label').textContent = '翻译中...';
+    btnTranslate.classList.add('is-loading');
+    btnTranslate.setAttribute('aria-busy', 'true');
+    const label = btnTranslate.querySelector('.btn-label');
+    if (label) label.textContent = '翻译中...';
   }
 
   let successCount = 0;
@@ -1073,7 +1076,10 @@ async function handleTranslate() {
   isTranslating = false;
   if (btnTranslate) {
     btnTranslate.disabled = false;
-    btnTranslate.querySelector('.btn-label').textContent = '翻译';
+    btnTranslate.classList.remove('is-loading');
+    btnTranslate.removeAttribute('aria-busy');
+    const label = btnTranslate.querySelector('.btn-label');
+    if (label) label.textContent = '翻译';
   }
 
   if (failCount === 0) {
