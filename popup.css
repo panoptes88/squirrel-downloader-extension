@@ -63,8 +63,17 @@
   box-sizing: border-box;
 }
 
+html {
+  /* 把文档宽度钉死在 420：弹窗尺寸由文档首选宽度决定，
+     html 不设宽度时会退化成"按内容量"，空列表就只剩内容宽（232px），
+     内容偏宽时又会把窗口撑大。overflow-x 兜底防止个别元素撑破。 */
+  width: 420px;
+  overflow-x: hidden;
+}
+
 body {
   width: 420px;
+  margin: 0;
   min-height: 300px;
   max-height: 600px;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif;
@@ -81,6 +90,64 @@ body {
   max-height: 600px;
 }
 
+/* 手机端（Edge / Chrome 手机版的扩展弹层）比桌面窄，固定 420px 会把右侧的
+   状态胶囊、资源计数、底部发送按钮裁掉，所以窄屏下改为跟随父容器宽度。
+   必须同时限定触摸设备：只看宽度会形成循环依赖——Chrome 按内容量弹窗宽度，
+   宽度一窄就命中这条规则把 body 改成 100%，空列表的弹窗就卡在 232px。 */
+@media (max-width: 419px) and (hover: none) and (pointer: coarse) {
+  html,
+  body {
+    width: 100%;
+  }
+
+  body {
+    max-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  .container {
+    max-height: 100vh;
+  }
+
+  /* 工具栏这一排在窄屏上会被按钮本身占满（刷新/清空/全选，开了 AI 翻译还多一个），
+     计数没有落脚点就会被顶到屏幕外。收紧间距，并允许换行兜底：
+     放得下时计数仍在同一行右对齐，放不下时整条落到第二行右对齐，而不是被裁掉。 */
+  .toolbar {
+    flex-wrap: wrap;
+    gap: 6px 4px;
+    padding: 8px 10px;
+  }
+
+  /* 窄屏下工具栏按钮只留图标：四个按钮都有 title + aria-label，去掉文字后
+     一排能省出 100px 左右，「N 个资源」稳稳留在同一行。
+     图标放大到 16px、内边距加大，弥补去掉文字后缩小的点击面积。 */
+  .toolbar .btn {
+    padding: 6px 8px;
+    white-space: nowrap;
+  }
+
+  .toolbar .btn .btn-label {
+    display: none;
+  }
+
+  /* 窄屏下按钮只显示图标，翻译进行中把「翻译中...」露出来作为唯一的文字反馈。
+     就算加上这几十字，一排也就 310px 上下，320px 的屏幕仍放得下；
+     真放不下还有上面的 flex-wrap 兜底，计数会换行而不是被裁掉。 */
+  .toolbar .btn.is-loading .btn-label {
+    display: inline;
+  }
+
+  .toolbar .btn svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .toolbar .proxy-toggle {
+    gap: 3px;
+    white-space: nowrap;
+  }
+}
+
 .hide {
   display: none !important;
 }
@@ -90,6 +157,7 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
   padding: 12px 14px;
   background: var(--primary);
   color: #fff;
@@ -99,9 +167,16 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0; /* 窄屏下允许收缩，避免把右侧状态挤出可视区 */
   font-size: 15px;
   font-weight: 600;
   letter-spacing: 0.2px;
+}
+
+.title > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .logo {
@@ -110,14 +185,37 @@ body {
   border-radius: 6px;
 }
 
+/* 状态胶囊同时是设置入口：点一下打开设置页。
+   作为 <button> 使用，需要把浏览器默认的边框/字体/颜色重置掉。 */
 .status {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  min-width: 0; /* 代理信息较长时允许收缩，避免把标题挤变形 */
   padding: 4px 10px;
+  border: none;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.15);
+  color: inherit;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: inherit;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.status:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.status:active {
+  background: rgba(255, 255, 255, 0.42);
+}
+
+.status-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .status-dot {
@@ -148,6 +246,7 @@ body {
   color: var(--text-sub);
   font-size: 12px;
   white-space: nowrap;
+  flex-shrink: 0; /* 窄屏下不要被前面的按钮挤出可视区 */
 }
 
 /* ===== 代理开关 ===== */
@@ -479,6 +578,17 @@ body {
   border-top: 1px solid var(--border);
 }
 
+/* 窄屏下让发送按钮可以收缩，文案超长时省略而不是撑破底栏 */
+.footer #btnSend {
+  min-width: 0;
+}
+
+.footer #btnSend .btn-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .selected-info {
   font-size: 12px;
   color: var(--text-sub);
@@ -500,7 +610,8 @@ body {
 /* ===== Toast ===== */
 .toast {
   position: fixed;
-  bottom: 24px;
+  /* 抬到底栏之上：底栏约 57px 高，24px 会让 toast 压在发送按钮上 */
+  bottom: 72px;
   left: 50%;
   transform: translateX(-50%) translateY(8px);
   display: flex;

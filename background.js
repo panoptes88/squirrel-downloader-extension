@@ -3,30 +3,90 @@
  * 嗅探网页媒体资源
  */
 
+// 默认启用的扩展名。与 options.js 里的 DEFAULT_EXTENSIONS 保持一致
+// （service worker 不是 module，无法直接复用 defaults.js，改动时请两处同步）。
+//
+// 刻意不含 ts：TS 是 HLS 的分片，一集视频动辄几百上千条，会把资源列表刷满，
+// 真正的入口（m3u8 播放列表）反而被淹没。需要时可在设置页手动勾选。
+const DEFAULT_ENABLED_EXTENSIONS = [
+  'm3u8', 'mp4', 'm4s', 'm4a', 'mpd', 'flv', 'webm',
+  'mp3', 'wav', 'ogg', 'aac', 'mkv', 'mov', 'avi'
+];
+
+// 旧版本的默认值（当时全部启用）。仅用于升级时判断用户是否动过默认设置。
+const LEGACY_DEFAULT_EXTENSIONS = DEFAULT_ENABLED_EXTENSIONS.concat(['ts']);
+
 // 全局状态
 const state = {
   // 按 tabId 分组存储嗅探到的资源
   tabResources: new Map(),
   // 临时存储请求头
   requestHeaders: new Map(),
-  // 已处理的 requestId 集合（去重）
-  processedRequests: new Set(),
-  // 启用的扩展名列表（默认全部启用）
+  // 启用的扩展名列表（默认见 DEFAULT_ENABLED_EXTENSIONS）
   enabledExtensions: null
 };
 
+// 每个 tab 最多保留的资源条数，超出时丢弃最早的（分片站点很容易刷出成百上千条）
+const MAX_RESOURCES_PER_TAB = 100;
+
+// 网络请求超时（毫秒）。没有超时时，服务器/NAS 不响应会让 fetch 一直挂着，
+// 界面停在"登录中/发送中"，既不报错也没有任何反馈。
+const LOGIN_TIMEOUT_MS = 10000;
+const TASK_TIMEOUT_MS = 15000;
+const M3U8_TIMEOUT_MS = 15000;
+
+/**
+ * AbortSignal.timeout() 触发时 reject 的是 TimeoutError，手动 abort 是 AbortError。
+ */
+function isTimeoutError(e) {
+  return !!e && (e.name === 'TimeoutError' || e.name === 'AbortError');
+}
+// 资源落盘（storage.session）的防抖定时器，按 tabId 区分
+const persistTimers = new Map();
+// 正在从 session 恢复的 tab，避免并发重复读
+const restoringTabs = new Map();
+
+/**
+ * 一次性迁移：旧版本的默认值是「全部启用」，其中包含 TS。
+ * 只有在用户从未改动过默认值（存下来的正好是旧的全集）时才替换成新默认。
+ *
+ * 用 extDefaultsMigrated 标记保证只做一次——否则用户以后手动把 TS 重新勾上，
+ * 存储值又会等于旧全集，下次启动就会被再次改回去。
+ * 不依赖 onInstalled 事件：未打包扩展重启时 Chrome 不一定按 update 上报。
+ */
+function migrateExtensionDefaults() {
+  return new Promise(function(resolve) {
+    chrome.storage.sync.get(['enabledExtensions', 'extDefaultsMigrated'], function(data) {
+      if (data.extDefaultsMigrated) { resolve(); return; }
+      const list = data.enabledExtensions;
+      const untouched =
+        Array.isArray(list) &&
+        list.length === LEGACY_DEFAULT_EXTENSIONS.length &&
+        LEGACY_DEFAULT_EXTENSIONS.every(function(ext) { return list.indexOf(ext) !== -1; });
+      chrome.storage.sync.set(
+        untouched
+          ? { enabledExtensions: DEFAULT_ENABLED_EXTENSIONS.slice(), extDefaultsMigrated: true }
+          : { extDefaultsMigrated: true },
+        function() {
+          if (untouched) {
+            console.log('[松鼠下载器] 升级：默认嗅探类型已更新，TS 不再默认抓取');
+          }
+          resolve();
+        }
+      );
+    });
+  });
+}
+
 // 加载启用的扩展名配置
 async function loadEnabledExtensions() {
+  await migrateExtensionDefaults();
   return new Promise((resolve) => {
     chrome.storage.sync.get(['enabledExtensions'], function(data) {
       if (data.enabledExtensions && data.enabledExtensions.length > 0) {
         state.enabledExtensions = new Set(data.enabledExtensions);
       } else {
-        // 默认全部启用
-        state.enabledExtensions = new Set([
-          'm3u8', 'mp4', 'ts', 'm4s', 'm4a', 'mpd', 'flv', 'webm',
-          'mp3', 'wav', 'ogg', 'aac', 'mkv', 'mov', 'avi'
-        ]);
+        state.enabledExtensions = new Set(DEFAULT_ENABLED_EXTENSIONS);
       }
       resolve();
     });
@@ -36,15 +96,17 @@ async function loadEnabledExtensions() {
 // 初始化时加载配置
 loadEnabledExtensions();
 
-// 定期清理 declarativeNetRequest 规则（每5分钟）
-setInterval(function() {
-  chrome.declarativeNetRequest.getSessionRules(function(rules) {
-    if (rules.length > 0) {
-      console.log('[松鼠下载器] 清理 session rules:', rules.length);
-      chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: rules.map(r => r.id) });
-    }
-  });
-}, 5 * 60 * 1000);
+
+// Service Worker 每次启动时清理残留的预览请求头规则。
+// 原来的 setInterval 在 MV3 里活不过空闲回收，等于永远不会执行；
+// popup 正常关闭会自己清，这里兜底 popup 崩溃/被强杀留下的规则。
+chrome.declarativeNetRequest.getSessionRules(function(rules) {
+  chrome.runtime.lastError; // 读取错误时静默忽略
+  if (Array.isArray(rules) && rules.length > 0) {
+    console.log('[松鼠下载器] 启动清理残留 session rules:', rules.length);
+    chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: rules.map(r => r.id) });
+  }
+});
 
 // 监听配置变化
 chrome.storage.onChanged.addListener(function(changes) {
@@ -222,10 +284,6 @@ function extractHeaders(requestHeaders) {
     ? Object.entries(headers).map(([k, v]) => `${k}: ${v}`).join('\n')
     : '';
 
-  if (result) {
-    console.log('[松鼠下载器] 提取到 headers:', result);
-  }
-
   return result;
 }
 
@@ -242,6 +300,8 @@ function addResource(tabId, resource) {
 
   if (!resources.has(key)) {
     resources.set(key, resource);
+    trimTabResources(resources);
+    schedulePersist(tabId);
     // 通知 popup 更新（如果打开的话）
     chrome.runtime.sendMessage({
       type: 'resourceAdded',
@@ -251,11 +311,142 @@ function addResource(tabId, resource) {
   }
 }
 
+/**
+ * 超出上限时丢弃最早的资源（Map 的迭代顺序即插入顺序）。
+ */
+function trimTabResources(resources) {
+  while (resources.size > MAX_RESOURCES_PER_TAB) {
+    const oldestKey = resources.keys().next().value;
+    resources.delete(oldestKey);
+  }
+}
+
+/**
+ * 只保留预览/下载用得到的字段。
+ * 刻意不落盘 Cookie / Authorization / x-* 等凭证——预览只用 Referer。
+ */
+function toStoredResource(resource) {
+  // 完整保留请求头。早先只抠出 Referer 存，导致 popup 从 session 恢复的资源
+  // 没有 Cookie / User-Agent——预览拿不到登录态，「随下载任务发送原站凭证」
+  // 也自然没有东西可发。
+  // storage.session 只存在内存里、浏览器关闭即清空，不会落盘。
+  return {
+    url: resource.url,
+    ext: resource.ext,
+    size: resource.size,
+    contentType: resource.contentType,
+    title: resource.title,
+    timestamp: resource.timestamp,
+    headers: resource.headers || ''
+  };
+}
+
+function sessionKey(tabId) {
+  return 'tabResources:' + tabId;
+}
+
+function hasSessionStorage() {
+  return !!(chrome.storage && chrome.storage.session);
+}
+
+/**
+ * 资源变化后延迟写盘，避免分片站点每条都触发一次存储写入。
+ */
+function schedulePersist(tabId) {
+  if (!hasSessionStorage()) return;
+  if (persistTimers.has(tabId)) return;
+  persistTimers.set(tabId, setTimeout(function() {
+    persistTimers.delete(tabId);
+    persistTabResources(tabId);
+  }, 200));
+}
+
+function persistTabResources(tabId) {
+  if (!hasSessionStorage()) return;
+  const resources = state.tabResources.get(tabId);
+  if (!resources || resources.size === 0) {
+    chrome.storage.session.remove(sessionKey(tabId)).catch(function() {});
+    return;
+  }
+  const list = Array.from(resources.values()).map(toStoredResource);
+  chrome.storage.session.set({ [sessionKey(tabId)]: list }).catch(function(e) {
+    console.warn('[松鼠下载器] 保存嗅探结果失败:', e && e.message);
+  });
+}
+
+/**
+ * 从 session 存储恢复某个 tab 的资源（Service Worker 被回收后 state 是空的）。
+ */
+async function ensureTabResourcesLoaded(tabId) {
+  if (!hasSessionStorage()) return;
+  if (restoringTabs.has(tabId)) return restoringTabs.get(tabId);
+  const task = (async function() {
+    try {
+      const key = sessionKey(tabId);
+      const data = await chrome.storage.session.get([key]);
+      const list = data && data[key];
+      if (!Array.isArray(list) || list.length === 0) return;
+
+      const merged = new Map();
+      list.forEach(function(item) {
+        if (item && item.url) merged.set(item.url.split('?')[0], item);
+      });
+      // 恢复期间可能已经有新资源进来，保留内存里较新的条目
+      const current = state.tabResources.get(tabId);
+      if (current) {
+        current.forEach(function(item, k) {
+          if (!merged.has(k)) merged.set(k, item);
+        });
+      }
+      trimTabResources(merged);
+      state.tabResources.set(tabId, merged);
+      console.log('[松鼠下载器] 从 session 恢复资源:', tabId, merged.size);
+    } catch (e) {
+      console.warn('[松鼠下载器] 恢复嗅探结果失败:', e && e.message);
+    }
+  })();
+  restoringTabs.set(tabId, task);
+  try {
+    await task;
+  } finally {
+    restoringTabs.delete(tabId);
+  }
+}
+
+/**
+ * 丢弃某个 tab 的资源：内存、待写盘定时器、session 存储一起清。
+ */
+function dropTabResources(tabId) {
+  state.tabResources.delete(tabId);
+  const timer = persistTimers.get(tabId);
+  if (timer) {
+    clearTimeout(timer);
+    persistTimers.delete(tabId);
+  }
+  if (hasSessionStorage()) {
+    chrome.storage.session.remove(sessionKey(tabId)).catch(function() {});
+  }
+}
+
+// 请求头缓存的 session 键：按 URL 存。
+// 只按 requestId 存内存 Map 是不可靠的——MV3 的 Service Worker 可能在
+// onSendHeaders 与 onResponseStarted 之间被回收，届时 Map 已清空，
+// 嗅探到的资源就没有 Cookie / User-Agent，表现为「随下载任务发送原站凭证」
+// 没有东西可发，最终只发出 Referer。
+function requestHeadersKey(url) {
+  return 'reqHeaders:' + url;
+}
+
 // 监听请求头
 chrome.webRequest.onSendHeaders.addListener(
   function(details) {
-    if (details.requestHeaders) {
-      state.requestHeaders.set(details.requestId, details.requestHeaders);
+    if (!details.requestHeaders) return;
+    state.requestHeaders.set(details.requestId, details.requestHeaders);
+    if (details.url) {
+      // 持久化兜底：SW 被回收后仍能按 URL 取回
+      chrome.storage.session
+        .set({ [requestHeadersKey(details.url)]: details.requestHeaders })
+        .catch(function() {});
     }
   },
   { urls: ['<all_urls>'] },
@@ -264,7 +455,7 @@ chrome.webRequest.onSendHeaders.addListener(
 
 // 监听响应 - 只监听媒体资源类型
 chrome.webRequest.onResponseStarted.addListener(
-  function(details) {
+  async function(details) {
     try {
       const url = details.url;
       if (shouldIgnoreUrl(url)) return;
@@ -281,10 +472,20 @@ chrome.webRequest.onResponseStarted.addListener(
       // 判断是否为媒体资源
       if (!isMediaResource(url, contentType)) return;
 
-      // 获取请求头
-      const requestHeaders = state.requestHeaders.get(details.requestId);
-      const headersStr = extractHeaders(requestHeaders);
+      // 获取请求头：先查内存快路径，取不到再按 URL 从 session 兜底
+      let requestHeaders = state.requestHeaders.get(details.requestId);
       state.requestHeaders.delete(details.requestId);
+      const headerKey = requestHeadersKey(url);
+      // session 的写入是异步的，而 onResponseStarted 可能紧随其后触发，
+      // 因此偶尔会读不到。短暂重试几次（总共约 300ms）足够覆盖这个窗口。
+      for (let attempt = 0; !requestHeaders && attempt < 6; attempt++) {
+        if (attempt > 0) await new Promise(r => setTimeout(r, 50));
+        const stored = await chrome.storage.session.get([headerKey]);
+        requestHeaders = stored[headerKey];
+      }
+      const headersStr = extractHeaders(requestHeaders);
+      // 用过即删，避免 session 里越积越多
+      chrome.storage.session.remove(headerKey).catch(function() {});
 
       // 获取文件大小
       let size = 0;
@@ -337,6 +538,14 @@ chrome.webRequest.onResponseStarted.addListener(
 );
 
 // 清理失败请求的请求头
+// 失败/取消的请求不会有 onResponseStarted，这里顺手清掉缓存
+chrome.webRequest.onErrorOccurred.addListener(
+  function(details) {
+    if (details.url) chrome.storage.session.remove(requestHeadersKey(details.url)).catch(function() {});
+  },
+  { urls: ['<all_urls>'] }
+);
+
 chrome.webRequest.onErrorOccurred.addListener(
   function(details) {
     state.requestHeaders.delete(details.requestId);
@@ -346,7 +555,7 @@ chrome.webRequest.onErrorOccurred.addListener(
 
 // Tab 关闭时清理资源
 chrome.tabs.onRemoved.addListener(function(tabId) {
-  state.tabResources.delete(tabId);
+  dropTabResources(tabId);
 });
 
 // 页面导航时清理资源（刷新或跳转）
@@ -357,7 +566,7 @@ chrome.webNavigation.onCommitted.addListener(function(details) {
     // 跳转：typed, link, auto_bookmark, auto_subframe, manual_subframe, generated, auto_toplevel, form_submit, keyword, keyword_generated
     const transitionTypes = ['reload', 'link', 'typed', 'form_submit', 'auto_bookmark', 'generated'];
     if (transitionTypes.includes(details.transitionType)) {
-      state.tabResources.delete(details.tabId);
+      dropTabResources(details.tabId);
       // 清理 declarativeNetRequest 规则
       chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [1] });
       console.log('[松鼠下载器] 页面刷新/跳转，清除资源和规则:', details.tabId);
@@ -381,16 +590,19 @@ chrome.tabs.onUpdated.addListener(function(tabId, changeInfo, tab) {
 chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
   if (message.type === 'getResources') {
     const tabId = message.tabId;
-    const resources = state.tabResources.get(tabId) || new Map();
-    sendResponse({
-      resources: Array.from(resources.values())
+    // Service Worker 可能刚被唤醒，内存里没有数据，先尝试从 session 恢复
+    ensureTabResourcesLoaded(tabId).then(function() {
+      const resources = state.tabResources.get(tabId) || new Map();
+      sendResponse({
+        resources: Array.from(resources.values())
+      });
     });
     return true;
   }
 
   if (message.type === 'clearResources') {
     const tabId = message.tabId;
-    state.tabResources.delete(tabId);
+    dropTabResources(tabId);
     sendResponse({ success: true });
     return true;
   }
@@ -421,7 +633,7 @@ chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
 
   if (message.type === 'setRequestHeaders') {
     // 设置请求头
-    setRequestHeaders(message.headers)
+    setRequestHeaders(message.headers, message.url)
       .then(() => sendResponse({ success: true }))
       .catch(err => sendResponse({ success: false, error: err.message }));
     return true;
@@ -450,15 +662,15 @@ async function loginAndSaveCookie(server, username, password) {
     const response = await fetch(loginUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password })
+      body: JSON.stringify({ username, password }),
+      signal: AbortSignal.timeout(LOGIN_TIMEOUT_MS)
     });
 
     console.log('[松鼠下载器] 登录响应状态:', response.status);
     console.log('[松鼠下载器] 响应 Content-Type:', response.headers.get('content-type'));
 
-    // 获取响应文本以便调试
+    // 先读成文本，兼容非 JSON 响应
     const responseText = await response.text();
-    console.log('[松鼠下载器] 响应内容前200字符:', responseText.substring(0, 200));
 
     if (!response.ok) {
       try {
@@ -476,7 +688,7 @@ async function loginAndSaveCookie(server, username, password) {
     } catch {
       return { success: false, error: '服务器返回无效的 JSON 响应' };
     }
-    console.log('[松鼠下载器] 登录成功:', data);
+    console.log('[松鼠下载器] 登录成功');
 
     // 等待一小段时间让浏览器处理 Set-Cookie
     await new Promise(resolve => setTimeout(resolve, 300));
@@ -503,7 +715,12 @@ async function loginAndSaveCookie(server, username, password) {
     return { success: true, user: data, token: token };
   } catch (e) {
     console.error('[松鼠下载器] 登录异常:', e);
-    return { success: false, error: '无法连接到服务器: ' + e.message };
+    return {
+      success: false,
+      error: isTimeoutError(e)
+        ? '连接服务器超时（10 秒），请检查服务器是否在线'
+        : '无法连接到服务器: ' + e.message
+    };
   }
 }
 
@@ -561,7 +778,8 @@ async function sendDownloadTask(server, auth, task) {
     const taskResp = await fetch(taskUrl, {
       method: 'POST',
       headers: headers,
-      body: JSON.stringify(task)
+      body: JSON.stringify(task),
+      signal: AbortSignal.timeout(TASK_TIMEOUT_MS)
     });
 
     if (taskResp.ok) {
@@ -572,7 +790,12 @@ async function sendDownloadTask(server, auth, task) {
       return { success: false, error: err.error || '创建任务失败' };
     }
   } catch (e) {
-    return { success: false, error: '请求失败: ' + e.message };
+    return {
+      success: false,
+      error: isTimeoutError(e)
+        ? '请求服务器超时（15 秒），任务可能已提交，请稍后到服务器确认'
+        : '请求失败: ' + e.message
+    };
   }
 }
 
@@ -595,8 +818,9 @@ async function fetchM3u8Content(url, headers) {
       }
     }
 
-    console.log('[松鼠下载器] 代理请求:', url, headers);
+    console.log('[松鼠下载器] 代理请求:', url.replace(/\?.*$/, ''));
 
+    fetchOptions.signal = AbortSignal.timeout(M3U8_TIMEOUT_MS);
     const response = await fetch(url, fetchOptions);
 
     if (!response.ok) {
@@ -606,12 +830,95 @@ async function fetchM3u8Content(url, headers) {
     const contentType = response.headers.get('content-type') || '';
     const text = await response.text();
 
-    console.log('[松鼠下载器] 代理响应:', contentType, text.substring(0, 200));
+    console.log('[松鼠下载器] 代理响应:', contentType, text.length + ' 字符');
 
     return { success: true, data: text, contentType: contentType };
   } catch (e) {
     console.error('[松鼠下载器] 代理请求失败:', e);
-    return { success: false, error: e.message };
+    return {
+      success: false,
+      error: isTimeoutError(e) ? '拉取 m3u8 超时（15 秒）' : e.message
+    };
+  }
+}
+
+/**
+ * 请求头注入规则的匹配条件。
+ *
+ * 这里刻意不按域名收口：HLS 的分片经常和 m3u8 不在同一个域名（m3u8 在
+ * hls.example.com，分片在 cdn.example.com），一旦限制 requestDomains，
+ * 分片请求就拿不到 Referer，表现为预览黑屏。
+ *
+ * 用 initiatorDomains = 扩展 ID，把规则限定为「只作用于本扩展自己发起的请求」：
+ * 预览是 popup（扩展页）发起的，没有 tabId，这是唯一能同时覆盖跨域分片、
+ * 又不影响其它标签页/站点的方式（参考猫爪的做法）。
+ * Chrome 101 以下不支持该字段，退化为不限定来源。
+ */
+function supportsInitiatorDomains() {
+  const match = /Chrome\/(\d+)/.exec(navigator.userAgent || '');
+  return !!match && parseInt(match[1], 10) >= 101;
+}
+
+async function buildRequestHeaderCondition(mediaUrl) {
+  const condition = {
+    resourceTypes: ['xmlhttprequest', 'media']
+  };
+
+  // 规则要对「预览时 hls.js 发出的请求」生效，而预览跑在 popup 页面里。
+  // 实测 initiatorDomains 用扩展 ID 匹配不上扩展页面发起的请求（main 分支没有
+  // 任何限制所以能预览，de6699f 加上 initiatorDomains 后预览就失效了），
+  // 因此改为按目标域名 requestDomains 限定：只影响发往媒体源站的请求。
+  if (supportsInitiatorDomains()) {
+    const host = hostnameOf(mediaUrl);
+    if (host) {
+      condition.requestDomains = [host];
+    }
+    // 双保险：无论如何都不碰 NAS 与 AI 接口
+    const excluded = await collectExcludedHosts();
+    if (excluded.length > 0) {
+      condition.excludedRequestDomains = excluded;
+    }
+  }
+  return condition;
+}
+
+/** 从 URL 里安全取出 hostname，取不到返回空串 */
+function hostnameOf(rawUrl) {
+  if (!rawUrl) return '';
+  try {
+    return new URL(rawUrl).hostname;
+  } catch (e) {
+    return '';
+  }
+}
+
+/**
+ * 收集「不能注入预览请求头」的域名。
+ *
+ * 预览规则会对扩展发起的所有 XHR / media 请求生效，包括本扩展自己调用的其它接口：
+ *   - server     你的 NAS。建任务靠 Cookie 里的 auth_token 鉴权，被视频站的
+ *                Cookie 覆盖会直接 401（「请先登录」）。
+ *   - aiBaseUrl  AI 翻译接口。视频站的 Cookie / Authorization 不该发给第三方。
+ * 用 excludedRequestDomains 把这两个域名排除掉；规则本身仍然不限目标域名，
+ * 这样跨域 CDN 的分片也能拿到 Referer / Cookie，预览不会黑屏。
+ */
+async function collectExcludedHosts() {
+  try {
+    const data = await chrome.storage.sync.get(['server', 'aiBaseUrl']);
+    const hosts = [];
+    for (const raw of [data.server, data.aiBaseUrl]) {
+      if (!raw) continue;
+      try {
+        const hostname = new URL(raw).hostname;
+        if (hostname) hosts.push(hostname);
+      } catch (e) {
+        // 地址还没填好或格式不对，跳过即可
+      }
+    }
+    return Array.from(new Set(hosts));
+  } catch (e) {
+    console.warn('[松鼠下载器] 读取排除域名失败:', e);
+    return [];
   }
 }
 
@@ -619,7 +926,9 @@ async function fetchM3u8Content(url, headers) {
  * 设置请求头（使用 declarativeNetRequest）
  * 参考猫爪实现
  */
-async function setRequestHeaders(headers) {
+async function setRequestHeaders(headers, mediaUrl) {
+  // 条件里要读媒体域名与排除域名，先算好再写规则
+  const condition = await buildRequestHeaderCondition(mediaUrl);
   return new Promise((resolve) => {
     // 先清除旧规则
     chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [1] }, function() {
@@ -630,6 +939,7 @@ async function setRequestHeaders(headers) {
 
       // 添加新规则
       const rules = {
+        // 排除 NAS 与 AI 接口，避免预览用的凭证覆盖它们的鉴权头（见 collectExcludedHosts）
         addRules: [{
           id: 1,
           priority: 1,
@@ -641,15 +951,13 @@ async function setRequestHeaders(headers) {
               value: headers[key]
             }))
           },
-          condition: {
-            resourceTypes: ["xmlhttprequest", "media"]
-          }
+          condition: condition
         }],
         removeRuleIds: [1]
       };
 
       chrome.declarativeNetRequest.updateSessionRules(rules, function() {
-        console.log('[松鼠下载器] 已设置请求头:', headers);
+        console.log('[松鼠下载器] 已设置请求头:', Object.keys(headers).join(', '));
         resolve();
       });
     });

@@ -14,28 +14,30 @@
         <img src="icons/icon48.png" alt="" class="logo">
         <span>松鼠下载器</span>
       </div>
-      <div class="status" id="status">
+      <!-- 状态胶囊本身就是设置入口：点一下打开设置页。
+           移动端没有右键菜单，这是唯一的显式入口。 -->
+      <button type="button" class="status" id="status" title="点击打开设置" aria-label="打开设置">
         <span class="status-dot" aria-hidden="true"></span>
         <span class="status-text">未连接</span>
-      </div>
+      </button>
     </div>
 
     <!-- 工具栏 -->
     <div class="toolbar">
       <button id="btnRefresh" class="btn btn-small btn-secondary" aria-label="刷新嗅探结果" title="刷新">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>
-        刷新
+        <span class="btn-label">刷新</span>
       </button>
       <button id="btnClear" class="btn btn-small btn-secondary" aria-label="清空嗅探结果" title="清空">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-        清空
+        <span class="btn-label">清空</span>
       </button>
       <button id="btnSelectAll" class="btn btn-small btn-secondary" aria-label="全选或取消全选" title="全选">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
-        全选
+        <span class="btn-label">全选</span>
       </button>
       <button id="btnTranslate" class="btn btn-small btn-secondary hide" aria-label="用 AI 翻译标题" title="翻译标题">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></svg>
         <span class="btn-label">翻译</span>
       </button>
       <div class="toolbar-right">

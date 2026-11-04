@@ -6,6 +6,10 @@
 > 插件本身只负责「嗅探 + 转发链接」，不下载视频；实际下载由你自己的 NAS 完成，
 > 全程不经过任何第三方服务器。
 
+**已上架 Microsoft Edge 加载项商店 → [立即安装](https://microsoftedge.microsoft.com/addons/detail/%E6%9D%BE%E9%BC%A0%E4%B8%8B%E8%BD%BD%E5%99%A8/pfgmmiphieigblllffihkhoojflaaima)**
+
+也可以「加载已解压的扩展程序」本地安装，见[快速开始](#2-安装插件)。
+
 ## 功能特性
 
 - 🔍 **资源嗅探** — 自动识别网页中的 m3u8、mp4、mpd 等媒体资源
@@ -43,13 +47,21 @@
 
 ![开发者模式](images/chrome-extension-dev-mode.png)
 
-**方式二：从 Chrome 应用商店安装**
+**方式二：从 Microsoft Edge 加载项商店安装（推荐普通用户）**
 
-> 上架审核中，通过后此处会补充商店链接。
+[松鼠下载器 · Microsoft Edge 加载项](https://microsoftedge.microsoft.com/addons/detail/%E6%9D%BE%E9%BC%A0%E4%B8%8B%E8%BD%BD%E5%99%A8/pfgmmiphieigblllffihkhoojflaaima)
+
+装完直接在扩展栏点开即可使用，无需开发者模式。
+
+> Chrome 应用商店版本在审核流程中，通过后会在此补充链接。Edge 加载项商店的
+> 版本同样基于 Manifest V3，在 Chrome / Edge 桌面版均可加载。
 
 ### 3. 配置插件
 
-右键扩展图标 → **选项** → 填写服务器地址、用户名、密码 → **测试连接** → 保存。
+右键扩展图标 → **选项**，或直接点击弹窗右上角的 **未配置 / 已配置** 状态胶囊 →
+填写服务器地址、用户名、密码 → **测试连接** → 保存。
+
+> 手机端（Edge 移动版）没有右键菜单，点弹窗右上角的状态胶囊即可进入设置页。
 
 ```
 服务器地址：http://192.168.1.100:21808
