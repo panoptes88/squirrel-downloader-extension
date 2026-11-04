@@ -1153,37 +1153,48 @@ async function handleTranslate() {
   let failCount = 0;
   let firstError = '';
 
-  for (const index of indicesToTranslate) {
+  // 同一标签页里所有资源的标题都取自 tab.title，通常完全相同。
+  // 按标题分组：每个唯一标题只请求一次，再回填给同组资源，
+  // 避免 N 个资源发出 N 次内容一模一样的请求。
+  const groups = new Map(); // title -> 资源下标数组
+  indicesToTranslate.forEach(index => {
     const resource = resources[index];
-    if (!resource) continue;
-
+    if (!resource) return;
     const title = resource.title || getFileName(resource.url);
-    if (!title) continue;
+    if (!title) return;
+    if (!groups.has(title)) groups.set(title, []);
+    groups.get(title).push(index);
+  });
 
+  for (const [title, indexes] of groups) {
     try {
-      console.log(`[翻译] 开始翻译 #${index}: "${title}"`);
+      console.log(`[翻译] 开始翻译 "${title}"（${indexes.length} 个资源）`);
       const translatedTitle = await callAiTranslate(title);
 
       // 验证翻译结果
       if (!translatedTitle || translatedTitle.trim() === '') {
-        console.error(`[翻译] #${index} 翻译结果为空`);
-        failCount++;
+        console.error(`[翻译] "${title}" 翻译结果为空`);
+        failCount += indexes.length;
         continue;
       }
 
-      // 保存原始标题和翻译后的标题
-      if (!resource.originalTitle) {
-        resource.originalTitle = title;
-      }
-      resource.translatedTitle = translatedTitle;
-      successCount++;
-      console.log(`[翻译] #${index} 成功: "${title}" → "${translatedTitle}"`);
+      indexes.forEach(index => {
+        const resource = resources[index];
+        if (!resource) return;
+        // 保存原始标题和翻译后的标题
+        if (!resource.originalTitle) {
+          resource.originalTitle = title;
+        }
+        resource.translatedTitle = translatedTitle;
+        successCount++;
+      });
+      console.log(`[翻译] 成功: "${title}" → "${translatedTitle}"（${indexes.length} 个资源）`);
     } catch (e) {
-      console.error(`[翻译] #${index} 失败:`, e.message);
+      console.error(`[翻译] "${title}" 失败:`, e.message);
       if (!firstError) {
         firstError = isTimeoutError(e) ? '请求超时（30 秒），请检查 AI 服务' : e.message;
       }
-      failCount++;
+      failCount += indexes.length;
     }
   }
 
@@ -1218,7 +1229,7 @@ async function handleTranslate() {
 async function callAiTranslate(text) {
   const url = `${aiTranslateConfig.baseUrl}/v1/chat/completions`;
 
-  const prompt = aiTranslateConfig.prompt.replace('{text}', text);
+  const prompt = applyPromptTemplate(aiTranslateConfig.prompt, text);
 
   console.log('[翻译] 请求 URL:', url);
   console.log('[翻译] 请求内容:', prompt.substring(0, 100) + '...');
@@ -1239,7 +1250,7 @@ async function callAiTranslate(text) {
         }
       ],
       temperature: 0.3,
-      max_tokens: 1000
+      max_tokens: 200
     })
   });
 
@@ -1267,6 +1278,17 @@ async function callAiTranslate(text) {
   }
 
   return result;
+}
+
+/**
+ * 把标题填进提示词模板。
+ * 用函数式替换：字符串替换会把标题里的 $& / $' 当成特殊替换模式。
+ * 模板里没有 {text} 时把标题追加到末尾，避免模型收到没有内容的指令。
+ */
+function applyPromptTemplate(template, text) {
+  const tpl = template || DEFAULT_AI_PROMPT;
+  if (!tpl.includes('{text}')) return `${tpl}\n\n${text}`;
+  return tpl.replace('{text}', () => text);
 }
 
 /**

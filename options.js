@@ -516,7 +516,7 @@ async function handleTestAiTranslate() {
 async function callAiTranslate(text, baseUrl, modelId, apiKey, prompt) {
   const url = `${baseUrl}/v1/chat/completions`;
 
-  const systemPrompt = prompt.replace('{text}', text);
+  const systemPrompt = applyPromptTemplate(prompt, text);
 
   const response = await fetch(url, {
     method: 'POST',
@@ -534,7 +534,7 @@ async function callAiTranslate(text, baseUrl, modelId, apiKey, prompt) {
         }
       ],
       temperature: 0.3,
-      max_tokens: 1000
+      max_tokens: 200
     })
   });
 
@@ -550,6 +550,17 @@ async function callAiTranslate(text, baseUrl, modelId, apiKey, prompt) {
   }
 
   return data.choices[0].message.content.trim();
+}
+
+/**
+ * 把标题填进提示词模板。
+ * 用函数式替换：字符串替换会把标题里的 $& / $' 当成特殊替换模式。
+ * 模板里没有 {text} 时把标题追加到末尾，避免模型收到没有内容的指令。
+ */
+function applyPromptTemplate(template, text) {
+  const tpl = template || DEFAULT_AI_PROMPT;
+  if (!tpl.includes('{text}')) return `${tpl}\n\n${text}`;
+  return tpl.replace('{text}', () => text);
 }
 
 /**
