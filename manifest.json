@@ -24,23 +24,10 @@
     "storage",
     "tabs",
     "cookies",
-    "activeTab",
-    "unlimitedStorage",
-    "declarativeNetRequest",
+    "declarativeNetRequestWithHostAccess",
     "webNavigation"
   ],
-  "web_accessible_resources": [
-    {
-      "resources": [
-        "lib/*"
-      ],
-      "matches": [
-        "<all_urls>"
-      ]
-    }
-  ],
   "host_permissions": [
-    "*://*/*",
     "<all_urls>"
   ],
   "options_ui": {

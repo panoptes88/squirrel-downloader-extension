@@ -22,8 +22,6 @@ const state = {
   tabResources: new Map(),
   // 临时存储请求头
   requestHeaders: new Map(),
-  // 已处理的 requestId 集合（去重）
-  processedRequests: new Set(),
   // 启用的扩展名列表（默认见 DEFAULT_ENABLED_EXTENSIONS）
   enabledExtensions: null
 };
