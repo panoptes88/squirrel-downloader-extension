@@ -579,7 +579,9 @@ async function callAiTranslate(text, baseUrl, modelId, apiKey, prompt) {
         }
       ],
       temperature: 0.3,
-      max_tokens: 200
+      // 推理模型（deepseek-flash / reasoner）会先输出 reasoning_content，
+      // 200 个 token 会被思考过程吃光，导致 content 为空、finish_reason=length
+      max_tokens: 2000
     })
   });
 
