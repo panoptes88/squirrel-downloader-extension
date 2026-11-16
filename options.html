@@ -22,13 +22,10 @@
         <input type="text" id="server" placeholder="http://192.168.1.100:21808">
         <p class="help">松鼠下载器（NAS 端）服务器地址，如 http://192.168.1.100:21808</p>
       </div>
-      <div class="form-group">
-        <label for="username">用户名</label>
-        <input type="text" id="username" placeholder="admin">
-      </div>
-      <div class="form-group">
-        <label for="password">密码</label>
-        <input type="password" id="password" placeholder="请输入密码">
+      <div class="form-group" id="tokenAuthGroup">
+        <label for="apiToken">API 令牌</label>
+        <input type="password" id="apiToken" placeholder="sq_...">
+        <p class="help">在 NAS 端「设置 → API 令牌」创建，可设置有效期并随时撤销。扩展不会保存密码。<br>需要 NAS 应用 1.0.0.0018 及以上版本。</p>
       </div>
       <div class="form-actions">
         <button id="btnTest" class="btn btn-secondary">

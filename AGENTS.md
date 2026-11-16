@@ -31,7 +31,7 @@ licenses/          # 第三方许可证全文
   - 通过 `chrome.webRequest.onSendHeaders` / `onResponseStarted` 嗅探媒体请求，按 `tabId` 分组存入内存 `state.tabResources`（Map），以 URL 路径部分（去掉 query）去重。
   - 媒体判定逻辑：`isMediaResource()` 结合 URL 扩展名（`MEDIA_EXTENSIONS`）和响应 `Content-Type`（`MEDIA_TYPES`），并特殊处理扩展名为 `.txt/.json` 但 Content-Type 是 m3u8 的情况（`MAYBE_M3U8_EXTENSIONS`）。`IGNORE_PATTERNS` 排除 Facebook/Twitter 等站点及 `data:`/`blob:` URL。
   - 通过 `chrome.runtime.onMessage` 向 popup/options 提供消息接口：`getResources`、`clearResources`、`testConnection`、`sendTask`、`fetchM3u8`、`setRequestHeaders`、`clearRequestHeaders`。
-  - 与服务器交互：先 `POST {server}/api/auth/login` 登录，从 `auth_token` cookie（或 `chrome.storage.local` 兜底）取 token，再带 `Cookie` 头 `POST {server}/api/tasks` 创建下载任务。
+  与服务器交互：设置页保存的 **API 令牌**（`sq_` 开头）直接放进 `Authorization: Bearer` 头请求 `POST {server}/api/tasks` 创建下载任务，不登录、不保存密码。令牌需在 NAS 应用 1.0.0.0018+ 的「设置 → API 令牌」创建。
   - 使用 `chrome.declarativeNetRequest` 会话规则（规则 id 固定为 1）为预览请求注入 Referer 等请求头。
 
 - **`popup.js`**

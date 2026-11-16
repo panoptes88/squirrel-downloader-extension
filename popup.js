@@ -31,8 +31,7 @@ function isTimeoutError(e) {
 // 服务器配置
 let serverConfig = {
   server: '',
-  username: '',
-  password: ''
+  apiToken: ''
 };
 
 // 代理配置
@@ -185,14 +184,13 @@ async function init() {
 async function loadConfig() {
   return new Promise((resolve) => {
     chrome.storage.sync.get(
-      ['server', 'username', 'password', 'proxyEnable', 'proxyType', 'proxyHost', 'proxyPort', 'proxyAuth', 'proxyUsername', 'proxyPassword',
+      ['server', 'apiToken', 'proxyEnable', 'proxyType', 'proxyHost', 'proxyPort', 'proxyAuth', 'proxyUsername', 'proxyPassword',
        'aiTranslateEnable', 'aiBaseUrl', 'aiModelId', 'aiApiKey', 'aiPrompt',
        'threadCount', 'retryCount', 'autoSelect', 'sendCredentials'],
       function(data) {
         serverConfig = {
           server: data.server || '',
-          username: data.username || '',
-          password: data.password || ''
+          apiToken: data.apiToken || ''
         };
         proxyConfig = {
           enable: data.proxyEnable || false,
@@ -227,7 +225,7 @@ async function loadConfig() {
  * 更新连接状态显示
  */
 function updateConnectionStatus() {
-  const isConnected = serverConfig.server && serverConfig.username;
+  const isConnected = serverConfig.server && !!serverConfig.apiToken;
   elements.statusDot.classList.toggle('connected', isConnected);
   let statusText = isConnected ? '已配置' : '未配置';
   if (proxyConfig.enable && proxyConfig.host) {
@@ -1034,7 +1032,7 @@ function updateSelectedCount() {
 async function handleSend() {
   if (selectedIndices.size === 0) return;
 
-  if (!serverConfig.server || !serverConfig.username || !serverConfig.password) {
+  if (!serverConfig.server || !serverConfig.apiToken) {
     showToast('请先配置服务器', 'error');
     chrome.runtime.openOptionsPage();
     return;
@@ -1102,8 +1100,7 @@ async function handleSend() {
             type: 'sendTask',
             server: serverConfig.server,
             auth: {
-              username: serverConfig.username,
-              password: serverConfig.password
+              apiToken: serverConfig.apiToken
             },
             task: task
           },
