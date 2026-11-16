@@ -609,7 +609,7 @@ chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
 
   if (message.type === 'testConnection') {
     // 测试服务器连接
-    testServerConnection(message.server, message.username, message.password)
+    testServerConnection(message.server, message.apiToken)
       .then(result => sendResponse(result))
       .catch(err => sendResponse({ success: false, error: err.message }));
     return true;
@@ -651,153 +651,77 @@ chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
 /**
  * 登录服务器并获取 auth_token
  */
-async function loginAndSaveCookie(server, username, password) {
-  try {
-    // 确保 server 地址格式正确
-    const serverUrl = server.replace(/\/+$/, ''); // 移除末尾斜杠
-    const loginUrl = `${serverUrl}/api/auth/login`;
-    console.log('[松鼠下载器] 尝试登录:', loginUrl);
-    console.log('[松鼠下载器] 服务器地址:', serverUrl);
-
-    const response = await fetch(loginUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
-      signal: AbortSignal.timeout(LOGIN_TIMEOUT_MS)
-    });
-
-    console.log('[松鼠下载器] 登录响应状态:', response.status);
-    console.log('[松鼠下载器] 响应 Content-Type:', response.headers.get('content-type'));
-
-    // 先读成文本，兼容非 JSON 响应
-    const responseText = await response.text();
-
-    if (!response.ok) {
-      try {
-        const err = JSON.parse(responseText);
-        return { success: false, error: err.error || `登录失败 (${response.status})` };
-      } catch {
-        return { success: false, error: `服务器返回非 JSON 响应 (${response.status})` };
-      }
-    }
-
-    // 解析成功响应
-    let data;
-    try {
-      data = JSON.parse(responseText);
-    } catch {
-      return { success: false, error: '服务器返回无效的 JSON 响应' };
-    }
-    console.log('[松鼠下载器] 登录成功');
-
-    // 等待一小段时间让浏览器处理 Set-Cookie
-    await new Promise(resolve => setTimeout(resolve, 300));
-
-    // 通过 chrome.cookies API 获取 auth_token
-    const parsedUrl = new URL(serverUrl);
-    const cookies = await chrome.cookies.getAll({
-      domain: parsedUrl.hostname,
-      name: 'auth_token'
-    });
-
-    console.log('[松鼠下载器] 获取到 cookies:', cookies.length);
-
-    let token = null;
-    if (cookies.length > 0) {
-      token = cookies[0].value;
-      // 保存到 storage 以便后续使用
-      await chrome.storage.local.set({ authToken: token });
-      console.log('[松鼠下载器] auth_token 已保存');
-    } else {
-      console.warn('[松鼠下载器] 未找到 auth_token cookie');
-    }
-
-    return { success: true, user: data, token: token };
-  } catch (e) {
-    console.error('[松鼠下载器] 登录异常:', e);
-    return {
-      success: false,
-      error: isTimeoutError(e)
-        ? '连接服务器超时（10 秒），请检查服务器是否在线'
-        : '无法连接到服务器: ' + e.message
-    };
-  }
-}
-
+  /**
+   * 取服务端的 RSA 公钥与一次性 challenge，并把凭据加密成密文结构。
+   *
+   * 扩展页属于安全上下文（chrome-extension://），可直接用 WebCrypto，
+   * 不需要像网页端那样引入 node-forge。
+   *
+   * 返回 null 表示服务端没有密文接口（老版本 NAS），调用方应回退明文登录。
+   */
 /**
  * 获取保存的 auth_token
  */
-async function getAuthToken(server) {
-  const serverUrl = server.replace(/\/+$/, '');
-  const parsedUrl = new URL(serverUrl);
-
-  // 先从 chrome.cookies 获取
-  const cookies = await chrome.cookies.getAll({
-    domain: parsedUrl.hostname,
-    name: 'auth_token'
-  });
-
-  if (cookies.length > 0) {
-    return cookies[0].value;
-  }
-
-  // 从 storage 获取
-  const data = await chrome.storage.local.get(['authToken']);
-  return data.authToken || null;
-}
-
 /**
  * 测试服务器连接
  */
-async function testServerConnection(server, username, password) {
-  return await loginAndSaveCookie(server, username, password);
-}
-
+  async function testServerConnection(server, apiToken) {
+    if (!apiToken) {
+      return { success: false, error: '请先填写 API 令牌' };
+    }
+    try {
+      const serverUrl = server.replace(/\/+$/, '');
+      const res = await fetch(`${serverUrl}/api/tasks`, {
+        headers: { Authorization: `Bearer ${apiToken}` },
+        signal: AbortSignal.timeout(LOGIN_TIMEOUT_MS)
+      });
+      if (res.ok) return { success: true };
+      if (res.status === 401) return { success: false, error: 'API 令牌无效、已撤销或已过期' };
+      return { success: false, error: `服务器返回 ${res.status}` };
+    } catch (e) {
+      return {
+        success: false,
+        error: isTimeoutError(e) ? '连接超时' : '无法连接到服务器: ' + e.message
+      };
+    }
+  }
 /**
  * 发送下载任务到远程服务器
  */
-async function sendDownloadTask(server, auth, task) {
-  try {
-    // 先登录获取 cookie
-    const loginResult = await loginAndSaveCookie(server, auth.username, auth.password);
-    if (!loginResult.success) {
-      return loginResult;
-    }
+  async function sendDownloadTask(server, auth, task) {
+    try {
+      const serverUrl = server.replace(/\/+$/, '');
+      const taskUrl = `${serverUrl}/api/tasks`;
 
-    // 获取 token
-    const token = loginResult.token || await getAuthToken(server);
+      if (!auth || !auth.apiToken) {
+        return { success: false, error: '请先在设置里填写 API 令牌' };
+      }
+      // 只走令牌：不登录、不保存密码
+      const taskResp = await fetch(taskUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${auth.apiToken}`
+        },
+        body: JSON.stringify(task),
+        signal: AbortSignal.timeout(TASK_TIMEOUT_MS)
+      });
 
-    // 创建任务 - 手动携带 Cookie 头
-    const serverUrl = server.replace(/\/+$/, '');
-    const taskUrl = `${serverUrl}/api/tasks`;
-    const headers = { 'Content-Type': 'application/json' };
-    if (token) {
-      headers['Cookie'] = `auth_token=${token}`;
-    }
-
-    const taskResp = await fetch(taskUrl, {
-      method: 'POST',
-      headers: headers,
-      body: JSON.stringify(task),
-      signal: AbortSignal.timeout(TASK_TIMEOUT_MS)
-    });
-
-    if (taskResp.ok) {
-      const data = await taskResp.json();
-      return { success: true, task: data };
-    } else {
+      if (taskResp.ok) {
+        const data = await taskResp.json();
+        return { success: true, task: data };
+      }
       const err = await taskResp.json().catch(() => ({}));
       return { success: false, error: err.error || '创建任务失败' };
+    } catch (e) {
+      return {
+        success: false,
+        error: isTimeoutError(e)
+          ? '请求服务器超时（15 秒），任务可能已提交，请稍后到服务器确认'
+          : '请求失败: ' + e.message
+      };
     }
-  } catch (e) {
-    return {
-      success: false,
-      error: isTimeoutError(e)
-        ? '请求服务器超时（15 秒），任务可能已提交，请稍后到服务器确认'
-        : '请求失败: ' + e.message
-    };
   }
-}
 
 /**
  * 代理获取 m3u8 内容

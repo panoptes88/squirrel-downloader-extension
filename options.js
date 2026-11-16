@@ -5,8 +5,7 @@
 // DOM 元素
 const elements = {
   server: document.getElementById('server'),
-  username: document.getElementById('username'),
-  password: document.getElementById('password'),
+  apiToken: document.getElementById('apiToken'),
   threadCount: document.getElementById('threadCount'),
   retryCount: document.getElementById('retryCount'),
   autoSelect: document.getElementById('autoSelect'),
@@ -85,8 +84,7 @@ async function init() {
 
   // 填充表单
   elements.server.value = config.server || '';
-  elements.username.value = config.username || '';
-  elements.password.value = config.password || '';
+  elements.apiToken.value = config.apiToken || '';
   elements.threadCount.value = config.threadCount || DEFAULT_THREAD_COUNT;
   elements.retryCount.value = config.retryCount || DEFAULT_RETRY_COUNT;
   elements.autoSelect.checked = config.autoSelect !== false;
@@ -136,7 +134,7 @@ async function init() {
 function loadConfig() {
   return new Promise((resolve) => {
     chrome.storage.sync.get(
-      ['server', 'username', 'password', 'threadCount', 'retryCount', 'autoSelect', 'sendCredentials', 'enabledExtensions',
+      ['server', 'apiToken', 'threadCount', 'retryCount', 'autoSelect', 'sendCredentials', 'enabledExtensions',
        'proxyEnable', 'proxyType', 'proxyHost', 'proxyPort', 'proxyAuth', 'proxyUsername', 'proxyPassword',
        'aiTranslateEnable', 'aiBaseUrl', 'aiModelId', 'aiApiKey', 'aiPrompt'],
       function(data) {
@@ -178,8 +176,7 @@ function collectConfig() {
 
   const config = {
     server: elements.server.value.trim().replace(/\/+$/, ''), // 移除末尾斜杠
-    username: elements.username.value.trim(),
-    password: elements.password.value,
+    apiToken: elements.apiToken.value.trim(),
     threadCount: parseInt(elements.threadCount.value) || DEFAULT_THREAD_COUNT,
     retryCount: parseInt(elements.retryCount.value) || DEFAULT_RETRY_COUNT,
     autoSelect: elements.autoSelect.checked,
@@ -220,6 +217,13 @@ function validateConfig(config) {
     } catch (e) {
       return { fieldId: 'server', message: '服务器地址格式不正确，例如 http://192.168.1.100:21808' };
     }
+  }
+
+  if (!config.apiToken) {
+    return { fieldId: 'apiToken', message: '请填写 API 令牌（在 NAS 端「设置 → API 令牌」创建）' };
+  }
+  if (!/^sq_/.test(config.apiToken)) {
+    return { fieldId: 'apiToken', message: 'API 令牌格式不正确，应以 sq_ 开头' };
   }
 
   if (config.proxyEnable) {
@@ -293,8 +297,6 @@ function resetToDefaults() {
   }
 
   elements.server.value = '';
-  elements.username.value = '';
-  elements.password.value = '';
   elements.threadCount.value = DEFAULT_THREAD_COUNT;
   elements.retryCount.value = DEFAULT_RETRY_COUNT;
   elements.autoSelect.checked = DEFAULT_AUTO_SELECT;
@@ -393,8 +395,6 @@ function bindEvents() {
  */
 async function handleTest() {
   const server = elements.server.value.trim();
-  const username = elements.username.value.trim();
-  const password = elements.password.value;
 
   if (!server) {
     showTestResult('请输入服务器地址', 'error');
@@ -408,8 +408,10 @@ async function handleTest() {
     return;
   }
 
-  if (!username || !password) {
-    showTestResult('请输入用户名和密码', 'error');
+  const apiToken = elements.apiToken.value.trim();
+  if (!apiToken) {
+    showTestResult('请输入 API 令牌（在 NAS 端「设置 → API 令牌」创建）', 'error');
+    elements.apiToken.focus();
     return;
   }
 
@@ -423,15 +425,15 @@ async function handleTest() {
         {
           type: 'testConnection',
           server: server,
-          username: username,
-          password: password
+          apiToken: elements.apiToken.value.trim(),
         },
         resolve
       );
     });
 
     if (result.success) {
-      showTestResult(`连接成功！用户: ${result.user.username || username}`, 'success');
+      showTestResult('连接成功！认证通过', 'success');
+      showTestResult('连接成功！认证通过', 'success');
     } else {
       showTestResult(`连接失败: ${result.error}`, 'error');
     }
