@@ -162,7 +162,7 @@ async function init() {
     }
 
     // 检查是否有服务器配置变化
-    if (changes.server || changes.username || changes.password) {
+    if (changes.server || changes.apiToken) {
       loadConfig().then(() => {
         updateConnectionStatus();
         updateSelectedCount();
