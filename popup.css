@@ -95,9 +95,13 @@ body {
    必须同时限定触摸设备：只看宽度会形成循环依赖——Chrome 按内容量弹窗宽度，
    宽度一窄就命中这条规则把 body 改成 100%，空列表的弹窗就卡在 232px。 */
 @media (max-width: 419px) and (hover: none) and (pointer: coarse) {
+  /* 手机端扩展面板是全屏的，必须让 html/body 有确定高度，
+     否则 .container 的 height: 100% 无参照物（父元素自动高度），
+     容器只会按内容收缩，面板底部留出一大片空白。 */
   html,
   body {
     width: 100%;
+    height: 100%;
   }
 
   body {
@@ -106,6 +110,7 @@ body {
   }
 
   .container {
+    height: 100%;
     max-height: 100vh;
   }
 
